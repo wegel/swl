@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod device;
+mod drm_helpers;
+
 use crate::state::{BackendData, State};
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use smithay::{
     backend::{
-        drm::{DrmNode, DrmDeviceFd},
+        drm::DrmNode,
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         session::{libseat::LibSeatSession, Event as SessionEvent, Session},
@@ -17,17 +20,10 @@ use smithay::{
         wayland_server::DisplayHandle,
     },
 };
-use std::{
-    collections::HashMap,
-    path::Path,
-};
+use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
-/// Placeholder for DRM device - will be filled in Phase 2c
-#[derive(Debug)]
-pub struct Device {
-    pub node: DrmNode,
-}
+pub use self::device::Device;
 
 /// KMS backend state
 #[derive(Debug)]
@@ -36,6 +32,7 @@ pub struct KmsState {
     pub libinput: Libinput,
     pub drm_devices: IndexMap<DrmNode, Device>,
     pub input_devices: HashMap<String, input::Device>,
+    pub primary_gpu: Option<DrmNode>,
 }
 
 pub fn init_backend(
@@ -81,6 +78,7 @@ pub fn init_backend(
         libinput: libinput_context,
         drm_devices: IndexMap::new(),
         input_devices: HashMap::new(),
+        primary_gpu: None,
     });
     
     // manually add already present gpus

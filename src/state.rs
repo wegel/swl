@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::backend::kms::KmsState;
+use crate::backend::kms::{KmsState, Device};
 use smithay::{
     backend::{
+        drm::DrmNode,
         input::InputEvent,
         session::Session,
     },
@@ -80,19 +81,50 @@ impl State {
         let _ = event;
     }
     
-    /// Handle device addition (stub for now - will be filled in Phase 2c)
+    /// Handle device addition
     pub fn device_added(&mut self, dev: libc::dev_t, path: &std::path::Path, _dh: &DisplayHandle) -> anyhow::Result<()> {
         tracing::info!("Device added: {} ({})", path.display(), dev);
         
+        let BackendData::Kms(kms) = &mut self.backend else {
+            return Ok(());
+        };
+        
         // check if session is active
-        if let BackendData::Kms(kms) = &self.backend {
-            if !kms.session.is_active() {
-                return Ok(());
-            }
+        if !kms.session.is_active() {
+            return Ok(());
         }
         
-        // we'll actually handle the device in Phase 2c
-        Ok(())
+        // check if this is actually a DRM device
+        let Ok(drm_node) = DrmNode::from_dev_id(dev) else {
+            tracing::debug!("Device {} is not a DRM device", path.display());
+            return Ok(());
+        };
+        
+        // don't add the same device twice
+        if kms.drm_devices.contains_key(&drm_node) {
+            tracing::debug!("Device {:?} already added", drm_node);
+            return Ok(());
+        }
+        
+        // create the device
+        match Device::new(&mut kms.session, path, dev, &self.loop_handle) {
+            Ok(device) => {
+                tracing::info!("Successfully initialized DRM device: {:?}", drm_node);
+                
+                // set primary GPU if not set
+                if kms.primary_gpu.is_none() {
+                    kms.primary_gpu = Some(drm_node.clone());
+                    tracing::info!("Setting primary GPU: {:?}", drm_node);
+                }
+                
+                kms.drm_devices.insert(drm_node, device);
+                Ok(())
+            }
+            Err(err) => {
+                tracing::warn!("Failed to initialize DRM device {}: {}", path.display(), err);
+                Ok(()) // non-fatal, might not be a GPU we can use
+            }
+        }
     }
     
     /// Handle device change (stub for now)
@@ -102,10 +134,34 @@ impl State {
         Ok(())
     }
     
-    /// Handle device removal (stub for now)
+    /// Handle device removal
     pub fn device_removed(&mut self, dev: libc::dev_t, _dh: &DisplayHandle) -> anyhow::Result<()> {
         tracing::info!("Device removed: {}", dev);
-        // we'll handle this in a later phase  
+        
+        let BackendData::Kms(kms) = &mut self.backend else {
+            return Ok(());
+        };
+        
+        // find and remove the device
+        if let Ok(drm_node) = DrmNode::from_dev_id(dev) {
+            if let Some(mut device) = kms.drm_devices.shift_remove(&drm_node) {
+                tracing::info!("Removing DRM device: {:?}", drm_node);
+                
+                // remove event source from event loop
+                if let Some(token) = device.event_token.take() {
+                    self.loop_handle.remove(token);
+                }
+                
+                // if this was the primary GPU, try to find another
+                if kms.primary_gpu.as_ref() == Some(&drm_node) {
+                    kms.primary_gpu = kms.drm_devices.keys().next().cloned();
+                    if let Some(ref new_primary) = kms.primary_gpu {
+                        tracing::info!("New primary GPU: {:?}", new_primary);
+                    }
+                }
+            }
+        }
+        
         Ok(())
     }
 }
