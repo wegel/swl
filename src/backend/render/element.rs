@@ -4,9 +4,10 @@ use smithay::{
     backend::renderer::{
         element::{
             surface::WaylandSurfaceRenderElement,
+            texture::TextureRenderElement,
             Element, Id, Kind, RenderElement,
         },
-        gles::GlesError,
+        gles::{GlesError, GlesTexture},
         glow::{GlowRenderer, GlowFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
         ImportAll, ImportMem, Renderer,
@@ -15,6 +16,8 @@ use smithay::{
 };
 
 use super::GlMultiRenderer;
+
+use crate::backend::render::GlMultiError;
 
 /// Trait for converting GlesError to renderer-specific errors
 #[allow(dead_code)] // will be used for error conversion in rendering
@@ -25,6 +28,14 @@ pub trait FromGlesError {
 impl FromGlesError for GlesError {
     fn from_gles_error(err: GlesError) -> Self {
         err
+    }
+}
+
+impl FromGlesError for GlMultiError {
+    fn from_gles_error(err: GlesError) -> Self {
+        // convert GlesError to MultiError
+        // The Render variant expects the renderer error type
+        smithay::backend::renderer::multigpu::Error::Render(err)
     }
 }
 
@@ -175,6 +186,8 @@ where
     Surface(WaylandSurfaceRenderElement<R>),
     /// Additional damage for forcing redraws
     Damage(DamageElement),
+    /// Texture element for offscreen rendering composition
+    Texture(TextureRenderElement<GlesTexture>),
 }
 
 impl<R> Element for CosmicElement<R>
@@ -186,6 +199,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.id(),
             CosmicElement::Damage(elem) => elem.id(),
+            CosmicElement::Texture(elem) => elem.id(),
         }
     }
 
@@ -193,6 +207,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.current_commit(),
             CosmicElement::Damage(elem) => elem.current_commit(),
+            CosmicElement::Texture(elem) => elem.current_commit(),
         }
     }
 
@@ -200,6 +215,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.src(),
             CosmicElement::Damage(elem) => elem.src(),
+            CosmicElement::Texture(elem) => elem.src(),
         }
     }
 
@@ -207,6 +223,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.geometry(scale),
             CosmicElement::Damage(elem) => elem.geometry(scale),
+            CosmicElement::Texture(elem) => elem.geometry(scale),
         }
     }
 
@@ -214,6 +231,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.location(scale),
             CosmicElement::Damage(elem) => elem.location(scale),
+            CosmicElement::Texture(elem) => elem.location(scale),
         }
     }
 
@@ -221,6 +239,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.transform(),
             CosmicElement::Damage(elem) => elem.transform(),
+            CosmicElement::Texture(elem) => elem.transform(),
         }
     }
 
@@ -228,6 +247,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.damage_since(scale, commit),
             CosmicElement::Damage(elem) => elem.damage_since(scale, commit),
+            CosmicElement::Texture(elem) => elem.damage_since(scale, commit),
         }
     }
 
@@ -235,6 +255,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.opaque_regions(scale),
             CosmicElement::Damage(elem) => elem.opaque_regions(scale),
+            CosmicElement::Texture(elem) => elem.opaque_regions(scale),
         }
     }
 
@@ -242,6 +263,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.alpha(),
             CosmicElement::Damage(elem) => elem.alpha(),
+            CosmicElement::Texture(elem) => elem.alpha(),
         }
     }
 
@@ -249,6 +271,7 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.kind(),
             CosmicElement::Damage(elem) => elem.kind(),
+            CosmicElement::Texture(elem) => elem.kind(),
         }
     }
 }
@@ -270,6 +293,14 @@ where
         match self {
             CosmicElement::Surface(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
             CosmicElement::Damage(elem) => <DamageElement as RenderElement<R>>::draw(elem, frame, src, dst, damage, opaque_regions),
+            CosmicElement::Texture(elem) => <TextureRenderElement<GlesTexture> as RenderElement<GlowRenderer>>::draw(
+                elem,
+                R::glow_frame_mut(frame),
+                src,
+                dst,
+                damage,
+                opaque_regions,
+            ).map_err(R::Error::from_gles_error),
         }
     }
 }

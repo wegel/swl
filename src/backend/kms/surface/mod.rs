@@ -17,7 +17,11 @@ use smithay::{
         egl::EGLContext,
         renderer::{
             damage::{OutputDamageTracker, Error as RenderError},
-            element::{solid::SolidColorRenderElement, texture::TextureRenderBuffer},
+            element::{
+                solid::SolidColorRenderElement, 
+                texture::{TextureRenderBuffer, TextureRenderElement},
+                Kind,
+            },
             glow::GlowRenderer,
             gles::GlesTexture,
             multigpu::GpuManager,
@@ -36,7 +40,10 @@ use smithay::{
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 
-use crate::backend::render::element::AsGlowRenderer;
+use crate::backend::render::{
+    element::{AsGlowRenderer, CosmicElement},
+    GlMultiRenderer,
+};
 use std::{
     collections::HashMap,
     sync::{
@@ -653,17 +660,28 @@ impl SurfaceThreadState {
             })
             .context("Failed to draw to offscreen render target")?;
         
-        // now we need to present the texture to the display
-        // for now, just present an empty frame - Phase 2jc will properly composite the texture
-        // cosmic-comp uses postprocess_elements() to create elements from the texture
+        // Phase 2jc: Composite the offscreen texture to the display
+        // Create a texture element from our offscreen buffer
+        // This is a simplified version of cosmic-comp's postprocess_elements()
+        let texture_element = TextureRenderElement::from_texture_render_buffer(
+            (0.0, 0.0),  // location at origin
+            &postprocess.texture,
+            None,  // no alpha
+            None,  // no src crop
+            None,  // no size override
+            Kind::Unspecified,
+        );
         
-        // use the multi-gpu renderer to present
-        // specify the element type explicitly to help the compiler
-        let empty_elements: Vec<SolidColorRenderElement> = Vec::new();
+        // wrap in CosmicElement for proper rendering
+        let elements: Vec<CosmicElement<GlMultiRenderer>> = vec![
+            CosmicElement::Texture(texture_element)
+        ];
+        
+        // use the multi-gpu renderer to present the composited texture
         let frame_result = self.compositor.as_mut().unwrap().render_frame(
             &mut renderer,
-            &empty_elements,
-            crate::backend::render::CLEAR_COLOR,
+            &elements,
+            [0.0, 0.0, 0.0, 0.0],  // black background (already rendered in texture)
             FrameFlags::empty(),
         ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
         
