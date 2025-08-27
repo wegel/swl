@@ -16,14 +16,13 @@ use smithay::{
         renderer::{
             glow::GlowRenderer,
             multigpu::GpuManager,
-            ImportDma,
         },
         session::Session,
     },
     output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{LoopHandle, RegistrationToken},
-        drm::control::{connector, crtc, Mode, ModeTypeFlags},
+        drm::control::{connector, crtc, ModeTypeFlags},
         gbm::BufferObjectFlags as GbmBufferFlags,
         rustix::fs::OFlags,
     },
@@ -36,6 +35,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 use tracing::{debug, error, info, warn};
+
+use crate::backend::render::{GlMultiRenderer, element::CosmicElement};
 
 /// EGL context and display for rendering
 #[derive(Debug)]
@@ -113,28 +114,8 @@ pub fn init_egl(gbm: &GbmDevice<DrmDeviceFd>) -> Result<EGLInternals> {
 }
 
 impl Device {
-    /// Create a DRM compositor for a surface
-    /// This will be called when we're ready to start rendering (Phase 2g)
-    #[allow(dead_code)] // will be used in Phase 2g
-    pub fn create_compositor_for_surface(
-        &mut self,
-        _crtc: crtc::Handle,
-        _mode: Mode,
-    ) -> Result<super::surface::GbmDrmOutput> {
-        // Phase 2g: Will implement actual DRM surface and output creation
-        // For now, this is a placeholder that compiles
-        // 
-        // The actual implementation will:
-        // 1. Create DrmSurface using self.drm.create_surface()
-        // 2. Create DrmCompositor with allocator and framebuffer exporter
-        // 3. Return as GbmDrmOutput
-        //
-        // See smithay/src/backend/drm/output.rs:337 for reference
-        
-        anyhow::bail!("DRM compositor creation not implemented yet (Phase 2g)")
-    }
     /// Scan for connected outputs and create them
-    pub fn scan_outputs(&mut self, event_loop: &LoopHandle<'static, crate::state::State>) -> Result<()> {
+    pub fn scan_outputs(&mut self, event_loop: &LoopHandle<'static, crate::state::State>, gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>) -> Result<()> {
         use smithay::reexports::drm::control::Device as ControlDevice;
         
         // get display configuration (connector -> CRTC mapping)  
@@ -185,6 +166,71 @@ impl Device {
                             continue;
                         }
                         
+                        // notify the new surface about the GPU node before resuming
+                        // this ensures PostprocessState can be created
+                        if let (Some(surface), Some(egl_context)) = (self.surface_manager.get(&crtc), self.egl.as_ref()) {
+                            use smithay::backend::egl::{context::ContextPriority, EGLContext};
+                            use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags};
+                            
+                            let shared_ctx = EGLContext::new_shared_with_priority(
+                                &egl_context.display,
+                                &egl_context.context,
+                                ContextPriority::High,
+                            )?;
+                            let allocator = GbmAllocator::new(
+                                self.gbm.clone(),
+                                GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+                            );
+                            surface.add_node(self.render_node, allocator, shared_ctx);
+                        }
+                        
+                        // create DRM compositor for the output
+                        // we need to get the DRM mode, not the output mode
+                        let drm_mode = conn_info.modes()[0]; // use first available mode
+                        
+                        // get renderer from GPU manager
+                        match gpu_manager.single_renderer(&self.render_node) {
+                            Ok(mut renderer) => {
+                                // create render elements
+                                // for now, just empty elements - the surface thread will populate them
+                                let elements = smithay::backend::drm::output::DrmOutputRenderElements::<
+                                    GlMultiRenderer, 
+                                    CosmicElement<GlMultiRenderer>
+                                >::default();
+                                
+                                // get planes for this CRTC
+                                let planes = self.drm.device().planes(&crtc)
+                                    .ok();
+                                
+                                // create the compositor
+                                match self.drm.lock().initialize_output(
+                                    crtc,
+                                    drm_mode,
+                                    &[conn],
+                                    &output,  // use output as OutputModeSource
+                                    planes,
+                                    &mut renderer,
+                                    &elements,
+                                ) {
+                                    Ok(compositor) => {
+                                        debug!("Created DRM compositor for output {}", output_name);
+                                        // send compositor to surface thread to start rendering
+                                        if let Some(surface) = self.surface_manager.get(&crtc) {
+                                            surface.resume(compositor);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        warn!(?err, "Failed to create DRM compositor for output");
+                                        continue;
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                warn!(?err, "Failed to get renderer for creating compositor");
+                                continue;
+                            }
+                        }
+                        
                         // store output and crtc mapping
                         self.outputs.insert(conn, output);
                         self.surfaces.insert(crtc, conn);
@@ -207,7 +253,10 @@ impl Device {
     ) -> Result<bool> {
         // for now, consider all devices in use if they exist
         // in the future we'd check if this device has outputs
-        let in_use = primary_node.is_none() || primary_node == Some(&self.render_node);
+        let in_use = primary_node.is_none() || primary_node == Some(&self.drm_node);
+        
+        debug!("update_egl: primary_node={:?}, self.drm_node={:?}, in_use={}", 
+               primary_node, self.drm_node, in_use);
         
         if in_use {
             if self.egl.is_none() {
@@ -232,6 +281,7 @@ impl Device {
                 self.egl = Some(egl);
                 
                 // add to GPU manager's API
+                info!("Adding render node {:?} to GPU manager", self.render_node);
                 gpu_manager.as_mut().add_node(self.render_node, allocator, renderer);
                 self.renderer = None;  // renderer is moved to the GPU manager
                 
@@ -274,7 +324,7 @@ impl Device {
         path: &Path,
         dev: libc::dev_t,
         event_loop: &LoopHandle<'static, crate::state::State>,
-        gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>,
+        _gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>,
         primary_node: Arc<RwLock<Option<DrmNode>>>,
     ) -> Result<Self> {
         info!("Initializing DRM device: {}", path.display());
@@ -315,10 +365,8 @@ impl Device {
                     .and_then(std::convert::identity)
                     .unwrap_or(drm_node);
                 
-                // get render formats from the GPU manager if possible
-                let formats = gpu_manager.single_renderer(&render_node)
-                    .map(|r| r.dmabuf_formats())
-                    .unwrap_or_default();
+                // get render formats from the EGL context
+                let formats = egl.context.dmabuf_texture_formats().clone();
                 
                 info!("EGL initialized, render node: {:?}", render_node);
                 // drop the EGL context for now, we'll recreate it later if needed

@@ -184,4 +184,4 @@ pub fn init_shaders(renderer: &mut GlowRenderer) -> Result<(), anyhow::Error> {
 
 /// Clear color for empty frames
 #[allow(dead_code)] // will be used in Phase 2g for clearing frames
-pub const CLEAR_COLOR: smithay::backend::renderer::Color32F = smithay::backend::renderer::Color32F::new(0.1, 0.1, 0.1, 1.0);
+pub const CLEAR_COLOR: smithay::backend::renderer::Color32F = smithay::backend::renderer::Color32F::new(0.0, 0.8, 0.0, 1.0);

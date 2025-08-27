@@ -470,13 +470,9 @@ fn surface_thread(
     
     let clock = Clock::new();
     
-    // initialize frame timings
-    let refresh_interval = output.current_mode().map(|mode| {
-        // smithay's Mode has refresh in millihertz
-        let refresh_rate = mode.refresh as f64 / 1000.0;
-        Duration::from_secs_f64(1.0 / refresh_rate)
-    });
-    let timings = Timings::new(refresh_interval, None, false, target_node.clone());
+    // initialize frame timings (will be properly set in resume())
+    // use None initially since we don't have the real DRM mode yet
+    let timings = Timings::new(None, None, false, target_node.clone());
     
     let mut state = SurfaceThreadState {
         api,
@@ -538,7 +534,8 @@ impl SurfaceThreadState {
         
         // update refresh interval from actual DRM mode
         let mode = compositor.with_compositor(|c| c.surface().pending_mode());
-        let interval = Duration::from_secs_f64(1.0 / crate::backend::kms::drm_helpers::calculate_refresh_rate(mode) as f64);
+        // calculate_refresh_rate returns millihertz, so divide by 1000 to get Hz
+        let interval = Duration::from_secs_f64(1000.0 / crate::backend::kms::drm_helpers::calculate_refresh_rate(mode) as f64);
         self.timings.set_refresh_interval(Some(interval));
         
         // set minimum refresh interval (30Hz minimum like cosmic-comp)
@@ -570,20 +567,18 @@ impl SurfaceThreadState {
         }
         
         self.compositor = Some(compositor);
+        debug!("Surface {} calling queue_redraw for initial render", self.output.name());
         self.queue_redraw();
+        debug!("Surface {} resume complete", self.output.name());
     }
     
     /// Select the appropriate render node for the output
     /// simplified version - just uses primary or target node
     #[allow(dead_code)] // used in redraw method
     fn render_node_for_output(&self) -> DrmNode {
-        // if we have a primary node set, use it; otherwise use target
-        self.primary_node
-            .read()
-            .unwrap()
-            .as_ref()
-            .cloned()
-            .unwrap_or(self.target_node)
+        // for single-GPU case, always use the target node (render node)
+        // the primary node is for DRM operations, not rendering
+        self.target_node
     }
     
     
@@ -593,8 +588,11 @@ impl SurfaceThreadState {
     
     fn queue_redraw_force(&mut self, force: bool) {
         let Some(_compositor) = self.compositor.as_mut() else {
+            debug!("No compositor for {}, skipping queue_redraw", self.output.name());
             return;
         };
+        
+        debug!("queue_redraw_force called for {} (force={})", self.output.name(), force);
         
         if let QueueState::WaitingForVBlank { .. } = &self.state {
             // we're waiting for VBlank, request a redraw afterwards.
@@ -620,20 +618,24 @@ impl SurfaceThreadState {
         let render_start = self.timings.next_render_time(&self.clock);
         
         let timer = if render_start.is_zero() {
-            trace!("Running late for frame.");
+            debug!("{}: Running late for frame, using immediate timer", self.output.name());
             Timer::immediate()
         } else {
+            debug!("{}: Scheduling render in {:?}", self.output.name(), render_start);
             Timer::from_duration(render_start)
         };
         
         let token = self
             .loop_handle
             .insert_source(timer, move |_time, _, state| {
+                debug!("Timer fired for {}, starting render", state.output.name());
                 state.timings.start_render(&state.clock);
                 if let Err(err) = state.redraw(estimated_presentation) {
                     let name = state.output.name();
                     warn!(?name, "Failed to submit rendering: {:?}", err);
                     state.queue_redraw_force(true);
+                } else {
+                    debug!("Render completed successfully for {}", state.output.name());
                 }
                 TimeoutAction::Drop
             })
@@ -719,8 +721,11 @@ impl SurfaceThreadState {
     
     /// Perform a redraw with damage tracking using PostprocessState
     fn redraw(&mut self, _estimated_presentation: Duration) -> Result<()> {
+        debug!("Starting redraw for {}", self.output.name());
+        
         // check we have a compositor first
         if self.compositor.is_none() {
+            debug!("No compositor for {}, skipping redraw", self.output.name());
             return Ok(());
         }
         
@@ -838,6 +843,7 @@ impl SurfaceThreadState {
         ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
         
         // queue the frame for presentation if there's content
+        debug!("Frame result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
         if !frame_result.is_empty {
             // Phase 2je: damage is already stored in the render closure above
             

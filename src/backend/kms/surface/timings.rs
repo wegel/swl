@@ -63,15 +63,17 @@ impl Timings {
         node: DrmNode,
     ) -> Self {
         let refresh_interval_ns = if let Some(interval) = &refresh_interval {
-            assert_eq!(interval.as_secs(), 0);
-            Some(NonZeroU64::new(interval.subsec_nanos().into()).unwrap())
+            // convert Duration to nanoseconds (must be less than 1 second for display refresh)
+            let total_nanos = interval.as_secs() * 1_000_000_000 + interval.subsec_nanos() as u64;
+            Some(NonZeroU64::new(total_nanos).unwrap())
         } else {
             None
         };
 
         let min_refresh_interval_ns = if let Some(interval) = &min_interval {
-            assert_eq!(interval.as_secs(), 0);
-            Some(NonZeroU64::new(interval.subsec_nanos().into()).unwrap())
+            // convert Duration to nanoseconds
+            let total_nanos = interval.as_secs() * 1_000_000_000 + interval.subsec_nanos() as u64;
+            Some(NonZeroU64::new(total_nanos).unwrap())
         } else {
             None
         };

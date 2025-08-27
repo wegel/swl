@@ -124,7 +124,7 @@ impl State {
                 }
                 
                 // scan for connected outputs
-                if let Err(err) = device.scan_outputs(&self.loop_handle) {
+                if let Err(err) = device.scan_outputs(&self.loop_handle, &mut kms.gpu_manager) {
                     tracing::warn!("Failed to scan outputs for device {:?}: {}", drm_node, err);
                 }
                 
