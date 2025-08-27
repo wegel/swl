@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use smithay::{
+    backend::renderer::{
+        element::{surface::WaylandSurfaceRenderElement, AsRenderElements},
+        ImportAll, Renderer,
+    },
     desktop::{Space, Window},
     output::Output,
-    utils::{Logical, Point},
+    utils::{Logical, Point, Scale},
 };
 use std::collections::HashMap;
 
@@ -95,5 +99,31 @@ impl Shell {
     /// Refresh the space (needed for damage tracking)
     pub fn refresh(&mut self) {
         self.space.refresh();
+    }
+    
+    /// Get render elements for all windows on the given output
+    pub fn render_elements<R>(&self, output: &Output, renderer: &mut R) -> Vec<WaylandSurfaceRenderElement<R>>
+    where
+        R: Renderer + ImportAll,
+        R::TextureId: Clone + 'static,
+    {
+        let mut elements = Vec::new();
+        let output_scale = Scale::from(output.current_scale().fractional_scale());
+        
+        // render all windows in the space
+        for window in self.space.elements() {
+            if let Some(location) = self.space.element_location(window) {
+                elements.extend(
+                    window.render_elements(
+                        renderer,
+                        location.to_physical_precise_round(output_scale),
+                        output_scale,
+                        1.0, // alpha
+                    )
+                );
+            }
+        }
+        
+        elements
     }
 }

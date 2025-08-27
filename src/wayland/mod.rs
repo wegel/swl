@@ -35,8 +35,16 @@ impl CompositorHandler for State {
     }
     
     fn commit(&mut self, surface: &WlSurface) {
-        // we'll handle commits when we have windows
-        let _ = surface;
+        // handle window surface commits  
+        if let Some(window) = self.shell.space.elements().find(|w| {
+            w.toplevel().unwrap().wl_surface() == surface
+        }) {
+            window.on_commit();
+            tracing::debug!("Window surface commit handled");
+        }
+        
+        // refresh the space to update damage tracking
+        self.shell.refresh();
     }
 }
 
@@ -56,12 +64,18 @@ impl XdgShellHandler for State {
     }
     
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let window = Window::new_wayland_window(surface);
+        let window = Window::new_wayland_window(surface.clone());
+        
+        // send initial configure
+        surface.send_configure();
         
         // add the window to our shell
         // for now, map to the first available output
         if let Some(output) = self.outputs.first() {
+            tracing::info!("New window created, adding to output {}", output.name());
             self.shell.add_window(window, output);
+        } else {
+            tracing::warn!("No outputs available for new window");
         }
     }
     
