@@ -7,6 +7,11 @@ use smithay::{
         input::InputEvent,
         session::Session,
     },
+    input::{Seat, SeatState},
+    wayland::{
+        compositor::CompositorState,
+        shm::ShmState,
+    },
     reexports::{
         calloop::{LoopHandle, LoopSignal},
         wayland_server::{Display, DisplayHandle},
@@ -28,6 +33,10 @@ pub struct State {
     pub should_stop: bool,
     pub socket_name: String,
     pub backend: BackendData,
+    pub seat_state: SeatState<State>,
+    pub seat: Seat<State>,
+    pub compositor_state: CompositorState,
+    pub shm_state: ShmState,
     session_active: bool,
 }
 
@@ -48,13 +57,29 @@ impl State {
     ) -> Self {
         let display_handle = display.handle();
         
+        // create compositor state
+        let compositor_state = CompositorState::new::<State>(&display_handle);
+        let shm_state = ShmState::new::<State>(&display_handle, vec![]);
+        
+        // create seat state and the default seat
+        let mut seat_state = SeatState::new();
+        let mut seat = seat_state.new_wl_seat(&display_handle, "seat0");
+        
+        // add pointer and keyboard capabilities
+        seat.add_keyboard(Default::default(), 200, 25).unwrap();
+        seat.add_pointer();
+        
         Self {
-            display_handle,
+            display_handle: display_handle.clone(),
             loop_handle,
             loop_signal,
             should_stop: false,
             socket_name,
             backend: BackendData::Uninitialized,
+            seat_state,
+            seat,
+            compositor_state,
+            shm_state,
             session_active: false,
         }
     }
@@ -76,9 +101,12 @@ impl State {
         }
     }
     
-    pub fn process_input_event(&mut self, event: InputEvent<impl smithay::backend::input::InputBackend>) {
-        // we'll handle input processing in a later phase
-        let _ = event;
+    pub fn process_input_event<B: smithay::backend::input::InputBackend>(&mut self, event: InputEvent<B>) 
+    where
+        <B as smithay::backend::input::InputBackend>::Device: 'static,
+    {
+        // delegate to our input handler
+        self.process_input_event_impl(event);
     }
     
     /// Handle device addition

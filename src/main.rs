@@ -11,7 +11,9 @@ use smithay::{
 use tracing::{error, info};
 
 mod backend;
+mod input;
 mod state;
+mod wayland;
 use state::State;
 
 fn main() {
@@ -101,7 +103,10 @@ fn init_wayland_display(
             // accept new wayland clients
             let _ = state
                 .display_handle
-                .insert_client(client_stream, std::sync::Arc::new(()));
+                .insert_client(
+                    client_stream, 
+                    std::sync::Arc::new(crate::wayland::handlers::ClientState::new())
+                );
         })
         .context("Failed to init wayland socket source")?;
     
