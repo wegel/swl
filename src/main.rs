@@ -12,6 +12,7 @@ use tracing::{error, info};
 
 mod backend;
 mod input;
+mod shell;
 mod state;
 mod wayland;
 use state::State;

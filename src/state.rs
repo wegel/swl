@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::backend::kms::{KmsState, Device};
+use crate::{
+    backend::kms::{KmsState, Device},
+    shell::Shell,
+};
 use smithay::{
     backend::{
         drm::DrmNode,
@@ -8,8 +11,10 @@ use smithay::{
         session::Session,
     },
     input::{Seat, SeatState},
+    output::Output,
     wayland::{
         compositor::CompositorState,
+        shell::xdg::XdgShellState,
         shm::ShmState,
     },
     reexports::{
@@ -36,7 +41,10 @@ pub struct State {
     pub seat_state: SeatState<State>,
     pub seat: Seat<State>,
     pub compositor_state: CompositorState,
+    pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
+    pub shell: Shell,
+    pub outputs: Vec<Output>,
     session_active: bool,
 }
 
@@ -59,6 +67,7 @@ impl State {
         
         // create compositor state
         let compositor_state = CompositorState::new::<State>(&display_handle);
+        let xdg_shell_state = XdgShellState::new::<State>(&display_handle);
         let shm_state = ShmState::new::<State>(&display_handle, vec![]);
         
         // create seat state and the default seat
@@ -68,6 +77,9 @@ impl State {
         // add pointer and keyboard capabilities
         seat.add_keyboard(Default::default(), 200, 25).unwrap();
         seat.add_pointer();
+        
+        // create the shell
+        let shell = Shell::new();
         
         Self {
             display_handle: display_handle.clone(),
@@ -79,7 +91,10 @@ impl State {
             seat_state,
             seat,
             compositor_state,
+            xdg_shell_state,
             shm_state,
+            shell,
+            outputs: Vec::new(),
             session_active: false,
         }
     }
@@ -152,8 +167,14 @@ impl State {
                 }
                 
                 // scan for connected outputs
-                if let Err(err) = device.scan_outputs(&self.loop_handle, &mut kms.gpu_manager) {
-                    tracing::warn!("Failed to scan outputs for device {:?}: {}", drm_node, err);
+                match device.scan_outputs(&self.loop_handle, &mut kms.gpu_manager) {
+                    Ok(outputs) => {
+                        // add outputs to our state
+                        self.outputs.extend(outputs);
+                    }
+                    Err(err) => {
+                        tracing::warn!("Failed to scan outputs for device {:?}: {}", drm_node, err);
+                    }
                 }
                 
                 kms.drm_devices.insert(drm_node, device);

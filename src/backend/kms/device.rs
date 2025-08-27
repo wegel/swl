@@ -115,7 +115,7 @@ pub fn init_egl(gbm: &GbmDevice<DrmDeviceFd>) -> Result<EGLInternals> {
 
 impl Device {
     /// Scan for connected outputs and create them
-    pub fn scan_outputs(&mut self, event_loop: &LoopHandle<'static, crate::state::State>, gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>) -> Result<()> {
+    pub fn scan_outputs(&mut self, event_loop: &LoopHandle<'static, crate::state::State>, gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>) -> Result<Vec<Output>> {
         use smithay::reexports::drm::control::Device as ControlDevice;
         
         // get display configuration (connector -> CRTC mapping)  
@@ -242,8 +242,9 @@ impl Device {
             }
         }
         
-        info!("Found {} connected output(s)", self.outputs.len());
-        Ok(())
+        let outputs: Vec<Output> = self.outputs.values().cloned().collect();
+        info!("Found {} connected output(s)", outputs.len());
+        Ok(outputs)
     }
     /// Update EGL context and add to GPU manager when device is in use
     pub fn update_egl(
