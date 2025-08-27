@@ -36,7 +36,7 @@ use smithay::{
         },
         drm::control::{connector, crtc},
     },
-    utils::{Clock, Monotonic, Rectangle, Physical, Transform},
+    utils::{Clock, Monotonic, Rectangle, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 
@@ -182,7 +182,8 @@ struct SurfaceThreadState {
     
     // offscreen rendering and damage tracking
     postprocess: Option<PostprocessState>,
-    last_frame_damage: Option<Vec<Rectangle<i32, Physical>>>,
+    last_frame_damage: Option<Vec<Rectangle<i32, smithay::utils::Buffer>>>,
+    frame_count: u32,  // track frame count for buffer age
     
     // scheduling
     state: QueueState,
@@ -462,6 +463,7 @@ fn surface_thread(
         compositor: None,
         postprocess: None,
         last_frame_damage: None,
+        frame_count: 0,
         state: QueueState::Idle,
         thread_sender,
         output,
@@ -660,17 +662,23 @@ impl SurfaceThreadState {
                 // unbind the texture
                 std::mem::drop(fb);
                 
-                // return damage regions
+                // Phase 2je: Return and accumulate damage regions
                 let area = texture.size().to_logical(1, transform);
                 
-                Ok(res.damage
+                let damage = res.damage
                     .cloned()
                     .map(|v| {
                         v.into_iter()
                             .map(|r| r.to_logical(1).to_buffer(1, transform, &area))
                             .collect::<Vec<_>>()
                     })
-                    .unwrap_or_default())
+                    .unwrap_or_default();
+                    
+                // Store damage for next frame
+                self.last_frame_damage = Some(damage.clone());
+                self.frame_count += 1;
+                
+                Ok(damage)
             })
             .context("Failed to draw to offscreen render target")?;
         
@@ -701,8 +709,7 @@ impl SurfaceThreadState {
         
         // queue the frame for presentation if there's content
         if !frame_result.is_empty {
-            // store damage for next frame (currently empty)
-            self.last_frame_damage = Some(Vec::new());  // Phase 2je will track properly
+            // Phase 2je: damage is already stored in the render closure above
             
             // queue for presentation (Phase 2k will add proper timing)
             self.compositor.as_mut().unwrap().queue_frame(())
