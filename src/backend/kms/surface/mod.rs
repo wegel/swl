@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use smithay::{
     backend::{
         allocator::{
-            gbm::GbmAllocator,
+            gbm::{GbmAllocator, GbmDevice},
             format::FormatSet,
         },
         drm::{
@@ -12,7 +12,9 @@ use smithay::{
             output::DrmOutput,
             DrmDeviceFd, DrmNode,
         },
+        egl::EGLContext,
         renderer::{
+            glow::GlowRenderer,
             multigpu::GpuManager,
         },
     },
@@ -25,6 +27,7 @@ use smithay::{
         drm::control::{connector, crtc},
     },
     utils::{Clock, Monotonic},
+    wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 use std::{
     collections::HashMap,
@@ -50,6 +53,16 @@ pub enum ThreadCommand {
     /// Resume rendering with the given compositor
     Resume {
         compositor: GbmDrmOutput,
+    },
+    /// Add a GPU node for rendering
+    NodeAdded {
+        node: DrmNode,
+        gbm: GbmAllocator<DrmDeviceFd>,
+        egl: EGLContext,
+    },
+    /// Remove a GPU node
+    NodeRemoved {
+        node: DrmNode,
     },
     /// Schedule a render frame
     ScheduleRender,
@@ -105,12 +118,20 @@ struct SurfaceThreadState {
     clock: Clock<Monotonic>,
 }
 
+/// Dmabuf feedback for a surface
+#[derive(Debug, Clone)]
+pub struct SurfaceDmabufFeedback {
+    pub render_feedback: DmabufFeedback,
+    pub scanout_feedback: DmabufFeedback,
+}
+
 /// Surface with render thread
 pub struct Surface {
     pub connector: connector::Handle,
     pub crtc: crtc::Handle,
     pub output: Output,
     pub primary_plane_formats: FormatSet,
+    pub dmabuf_feedback: Option<SurfaceDmabufFeedback>,
     
     // threading support
     active: Arc<AtomicBool>,
@@ -170,6 +191,7 @@ impl Surface {
             crtc,
             output,
             primary_plane_formats: FormatSet::default(),
+            dmabuf_feedback: None,
             active,
             thread_command: tx,
             thread_token,
@@ -197,6 +219,48 @@ impl Surface {
     /// Check if the surface is active
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
+    }
+    
+    /// Add a GPU node to the surface thread
+    pub fn add_node(&self, node: DrmNode, gbm: GbmAllocator<DrmDeviceFd>, egl: EGLContext) {
+        info!("Adding GPU node {:?} to surface {}", node, self.output.name());
+        let _ = self.thread_command.send(ThreadCommand::NodeAdded { node, gbm, egl });
+    }
+    
+    /// Remove a GPU node from the surface thread
+    pub fn remove_node(&self, node: DrmNode) {
+        info!("Removing GPU node {:?} from surface {}", node, self.output.name());
+        let _ = self.thread_command.send(ThreadCommand::NodeRemoved { node });
+    }
+    
+    /// Update dmabuf feedback based on current formats
+    pub fn update_dmabuf_feedback(&mut self, render_node: DrmNode, render_formats: FormatSet) {
+        // simplified dmabuf feedback - just basic render and scanout tranches
+        // cosmic-comp has more sophisticated logic for multi-gpu scenarios
+        
+        let builder = DmabufFeedbackBuilder::new(render_node.dev_id(), render_formats.clone());
+        
+        // build basic render feedback
+        let render_feedback = builder.clone().build().unwrap();
+        
+        // build scanout feedback with primary plane formats if available
+        let scanout_feedback = if !self.primary_plane_formats.iter().next().is_none() {
+            builder
+                .add_preference_tranche(
+                    render_node.dev_id(),
+                    None,  // no specific flags for now
+                    self.primary_plane_formats.clone(),
+                )
+                .build()
+                .unwrap()
+        } else {
+            render_feedback.clone()
+        };
+        
+        self.dmabuf_feedback = Some(SurfaceDmabufFeedback {
+            render_feedback,
+            scanout_feedback,
+        });
     }
 }
 
@@ -249,6 +313,37 @@ impl SurfaceManager {
     pub fn remove(&mut self, crtc: &crtc::Handle) -> Option<Surface> {
         self.surfaces.remove(crtc)
     }
+    
+    /// Update GPU nodes for all surfaces
+    pub fn update_surface_nodes(
+        &mut self,
+        node: DrmNode,
+        gbm: &GbmDevice<DrmDeviceFd>,
+        egl: &crate::backend::kms::device::EGLInternals,
+        add: bool,
+    ) -> Result<()> {
+        use smithay::backend::egl::{context::ContextPriority, EGLContext};
+        use smithay::backend::allocator::{gbm::{GbmAllocator, GbmBufferFlags}};
+        
+        for surface in self.surfaces.values_mut() {
+            if add {
+                // create a new shared context for this surface
+                let shared_ctx = EGLContext::new_shared_with_priority(
+                    &egl.display,
+                    &egl.context,
+                    ContextPriority::High,
+                )?;
+                let allocator = GbmAllocator::new(
+                    gbm.clone(),
+                    GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+                );
+                surface.add_node(node.clone(), allocator, shared_ctx);
+            } else {
+                surface.remove_node(node.clone());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Surface render thread
@@ -294,6 +389,14 @@ fn surface_thread(
             Event::Msg(ThreadCommand::Resume { compositor }) => {
                 _state.resume(compositor);
             }
+            Event::Msg(ThreadCommand::NodeAdded { node, gbm, egl }) => {
+                if let Err(err) = _state.node_added(node, gbm, egl) {
+                    tracing::warn!(?err, ?node, "Failed to add node to surface thread");
+                }
+            }
+            Event::Msg(ThreadCommand::NodeRemoved { node }) => {
+                _state.node_removed(node);
+            }
             Event::Msg(ThreadCommand::ScheduleRender) => {
                 _state.queue_redraw();
             }
@@ -321,6 +424,44 @@ impl SurfaceThreadState {
         debug!("Resuming surface {}", self.output.name());
         self.compositor = Some(compositor);
         self.queue_redraw();
+    }
+    
+    /// Select the appropriate render node for the output
+    /// simplified version - just uses primary or target node
+    fn render_node_for_output(&self) -> DrmNode {
+        // if we have a primary node set, use it; otherwise use target
+        self.primary_node
+            .read()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .unwrap_or(self.target_node)
+    }
+    
+    /// Get renderer for the selected node
+    fn get_renderer(&mut self) -> Option<smithay::backend::renderer::multigpu::MultiRenderer<'_, '_, crate::backend::render::GbmGlowBackend<DrmDeviceFd>, crate::backend::render::GbmGlowBackend<DrmDeviceFd>>> {
+        let render_node = self.render_node_for_output();
+        
+        // get compositor format if available
+        let format = self.compositor.as_ref().map(|c| c.format());
+        
+        if render_node != self.target_node && format.is_some() {
+            // multi-gpu case: need to render on one GPU and display on another
+            self.api.renderer(&render_node, &self.target_node, format.unwrap())
+                .map_err(|e| {
+                    error!("Failed to get multi-gpu renderer: {}", e);
+                    e
+                })
+                .ok()
+        } else {
+            // single-gpu case: render and display on same GPU
+            self.api.single_renderer(&self.target_node)
+                .map_err(|e| {
+                    error!("Failed to get single-gpu renderer: {}", e);
+                    e
+                })
+                .ok()
+        }
     }
     
     fn queue_redraw(&mut self) {
@@ -359,5 +500,25 @@ impl SurfaceThreadState {
                 self.state = QueueState::Idle;
             }
         }
+    }
+    
+    fn node_added(
+        &mut self,
+        node: DrmNode,
+        gbm: GbmAllocator<DrmDeviceFd>,
+        egl: EGLContext,
+    ) -> Result<()> {
+        // create glow renderer from EGL context
+        let renderer = unsafe { GlowRenderer::new(egl) }
+            .context("Failed to create glow renderer")?;
+        
+        // add the node to the GPU manager
+        self.api.as_mut().add_node(node, gbm, renderer);
+        
+        Ok(())
+    }
+    
+    fn node_removed(&mut self, node: DrmNode) {
+        self.api.as_mut().remove_node(&node);
     }
 }

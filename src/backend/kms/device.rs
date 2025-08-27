@@ -233,10 +233,31 @@ impl Device {
                 // add to GPU manager's API
                 gpu_manager.as_mut().add_node(self.render_node, allocator, renderer);
                 self.renderer = None;  // renderer is moved to the GPU manager
+                
+                // notify surfaces about the new GPU node
+                if let Some(egl_context) = self.egl.as_ref() {
+                    self.surface_manager.update_surface_nodes(
+                        self.render_node,
+                        &self.gbm,
+                        egl_context,
+                        true,  // add node
+                    )?;
+                }
             }
             Ok(true)
         } else {
             if self.egl.is_some() {
+                // notify surfaces about the removed GPU node first
+                // (before we drop the egl context)
+                if let Some(egl_context) = self.egl.as_ref() {
+                    let _ = self.surface_manager.update_surface_nodes(
+                        self.render_node,
+                        &self.gbm,
+                        egl_context,
+                        false,  // remove node
+                    );
+                }
+                
                 self.egl = None;
                 self.allocator = None;
                 self.renderer = None;
