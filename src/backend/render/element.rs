@@ -7,12 +7,14 @@ use smithay::{
             Element, Id, Kind, RenderElement,
         },
         gles::GlesError,
-        glow::GlowRenderer,
+        glow::{GlowRenderer, GlowFrame},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
         ImportAll, ImportMem, Renderer,
     },
     utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale},
 };
+
+use super::GlMultiRenderer;
 
 /// Trait for converting GlesError to renderer-specific errors
 #[allow(dead_code)] // will be used for error conversion in rendering
@@ -31,6 +33,12 @@ impl FromGlesError for GlesError {
 pub trait AsGlowRenderer: Renderer {
     fn glow_renderer(&self) -> &GlowRenderer;
     fn glow_renderer_mut(&mut self) -> &mut GlowRenderer;
+    fn glow_frame<'a, 'frame, 'buffer>(
+        frame: &'a Self::Frame<'frame, 'buffer>,
+    ) -> &'a GlowFrame<'frame, 'buffer>;
+    fn glow_frame_mut<'a, 'frame, 'buffer>(
+        frame: &'a mut Self::Frame<'frame, 'buffer>,
+    ) -> &'a mut GlowFrame<'frame, 'buffer>;
 }
 
 impl AsGlowRenderer for GlowRenderer {
@@ -40,6 +48,40 @@ impl AsGlowRenderer for GlowRenderer {
     
     fn glow_renderer_mut(&mut self) -> &mut GlowRenderer {
         self
+    }
+    
+    fn glow_frame<'a, 'frame, 'buffer>(
+        frame: &'a Self::Frame<'frame, 'buffer>,
+    ) -> &'a GlowFrame<'frame, 'buffer> {
+        frame
+    }
+    
+    fn glow_frame_mut<'a, 'frame, 'buffer>(
+        frame: &'a mut Self::Frame<'frame, 'buffer>,
+    ) -> &'a mut GlowFrame<'frame, 'buffer> {
+        frame
+    }
+}
+
+impl<'a> AsGlowRenderer for GlMultiRenderer<'a> {
+    fn glow_renderer(&self) -> &GlowRenderer {
+        self.as_ref()
+    }
+    
+    fn glow_renderer_mut(&mut self) -> &mut GlowRenderer {
+        self.as_mut()
+    }
+    
+    fn glow_frame<'b, 'frame, 'buffer>(
+        frame: &'b Self::Frame<'frame, 'buffer>,
+    ) -> &'b GlowFrame<'frame, 'buffer> {
+        frame.as_ref()
+    }
+    
+    fn glow_frame_mut<'b, 'frame, 'buffer>(
+        frame: &'b mut Self::Frame<'frame, 'buffer>,
+    ) -> &'b mut GlowFrame<'frame, 'buffer> {
+        frame.as_mut()
     }
 }
 

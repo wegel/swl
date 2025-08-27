@@ -6,6 +6,7 @@ use smithay::{
         allocator::{
             gbm::{GbmAllocator, GbmDevice},
             format::FormatSet,
+            Fourcc,
         },
         drm::{
             compositor::FrameFlags,
@@ -15,10 +16,12 @@ use smithay::{
         },
         egl::EGLContext,
         renderer::{
-            damage::OutputDamageTracker,
-            element::solid::SolidColorRenderElement,
+            damage::{OutputDamageTracker, Error as RenderError},
+            element::{solid::SolidColorRenderElement, texture::TextureRenderBuffer},
             glow::GlowRenderer,
+            gles::GlesTexture,
             multigpu::GpuManager,
+            Bind, Renderer, Offscreen, Texture,
         },
     },
     output::Output,
@@ -29,9 +32,11 @@ use smithay::{
         },
         drm::control::{connector, crtc},
     },
-    utils::{Clock, Monotonic, Rectangle, Physical},
+    utils::{Clock, Monotonic, Rectangle, Physical, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
+
+use crate::backend::render::element::AsGlowRenderer;
 use std::{
     collections::HashMap,
     sync::{
@@ -81,6 +86,62 @@ pub enum SurfaceCommand {
     // placeholder for now - we'll add commands as needed
 }
 
+/// Simplified PostprocessState for offscreen rendering
+/// Based on cosmic-comp's approach but simplified for our needs
+struct PostprocessState {
+    texture: TextureRenderBuffer<GlesTexture>,
+    damage_tracker: OutputDamageTracker,
+}
+
+impl PostprocessState {
+    /// Create a new PostprocessState with offscreen texture
+    fn new_with_renderer<R>(
+        renderer: &mut R,
+        format: Fourcc,
+        output: &Output,
+    ) -> Result<Self>
+    where
+        R: AsGlowRenderer + Offscreen<GlesTexture>,
+    {
+        let mode = output.current_mode()
+            .ok_or_else(|| anyhow::anyhow!("Output has no mode"))?;
+        
+        let size = mode.size;
+        let scale = output.current_scale().integer_scale();
+        let transform = output.current_transform();
+        let buffer_size = size.to_logical(1).to_buffer(1, Transform::Normal);
+        let opaque_regions = vec![Rectangle::from_size(buffer_size)];
+        
+        // create offscreen texture
+        let texture = Offscreen::<GlesTexture>::create_buffer(
+            renderer,
+            format,
+            buffer_size,
+        ).map_err(|e| anyhow::anyhow!("Failed to create buffer: {:?}", e))?;
+        
+        // create texture render buffer
+        let texture_buffer = TextureRenderBuffer::from_texture(
+            renderer.glow_renderer(),
+            texture,
+            scale,
+            transform,
+            Some(opaque_regions),
+        );
+        
+        // create damage tracker (without output transform to match texture)
+        let damage_tracker = OutputDamageTracker::new(
+            size,
+            output.current_scale().fractional_scale(),
+            Transform::Normal,  // no transform for offscreen buffer
+        );
+        
+        Ok(PostprocessState {
+            texture: texture_buffer,
+            damage_tracker,
+        })
+    }
+}
+
 /// Queue state for frame scheduling
 #[derive(Debug)]
 pub enum QueueState {
@@ -109,8 +170,8 @@ struct SurfaceThreadState {
     active: Arc<AtomicBool>,
     compositor: Option<GbmDrmOutput>,
     
-    // damage tracking
-    damage_tracker: Option<OutputDamageTracker>,
+    // offscreen rendering and damage tracking
+    postprocess: Option<PostprocessState>,
     last_frame_damage: Option<Vec<Rectangle<i32, Physical>>>,
     
     // scheduling
@@ -382,7 +443,7 @@ fn surface_thread(
         target_node,
         active,
         compositor: None,
-        damage_tracker: None,
+        postprocess: None,
         last_frame_damage: None,
         state: QueueState::Idle,
         thread_sender,
@@ -432,14 +493,26 @@ impl SurfaceThreadState {
     fn resume(&mut self, compositor: GbmDrmOutput) {
         debug!("Resuming surface {}", self.output.name());
         
-        // initialize damage tracker for the output if not already done
-        if self.damage_tracker.is_none() {
-            if let Some(mode) = self.output.current_mode() {
-                // create damage tracker from output configuration
-                self.damage_tracker = Some(OutputDamageTracker::from_output(&self.output));
-                debug!("Initialized damage tracker for {} with mode {:?}", self.output.name(), mode);
-            } else {
-                error!("Cannot initialize damage tracker: output {} has no mode", self.output.name());
+        // create PostprocessState if not already done
+        if self.postprocess.is_none() && self.output.current_mode().is_some() {
+            let format = compositor.format();
+            
+            // get renderer for creating postprocess state
+            match self.api.single_renderer(&self.target_node) {
+                Ok(mut renderer) => {
+                    match PostprocessState::new_with_renderer(&mut renderer, format, &self.output) {
+                        Ok(state) => {
+                            self.postprocess = Some(state);
+                            debug!("Created PostprocessState for {}", self.output.name());
+                        }
+                        Err(e) => {
+                            error!("Failed to create PostprocessState: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to get renderer for PostprocessState: {:?}", e);
+                }
             }
         }
         
@@ -498,28 +571,31 @@ impl SurfaceThreadState {
         }
     }
     
-    /// Perform a redraw with damage tracking
+    /// Perform a redraw with damage tracking using PostprocessState
     fn redraw(&mut self) -> Result<()> {
         // check we have a compositor first
         if self.compositor.is_none() {
             return Ok(());
         }
         
+        // check we have postprocess state
+        if self.postprocess.is_none() {
+            error!("No postprocess state for output {}", self.output.name());
+            return Ok(());
+        }
+        
         // for now, just render a clear color
         // Phase 2m will add actual element rendering
-        // use an empty vector - the clear color will fill the screen
         let elements: Vec<SolidColorRenderElement> = Vec::new();
         
-        // determine render node
+        // get format and render node before mutable borrows
+        let format = self.compositor.as_ref().unwrap().format();
         let render_node = self.render_node_for_output();
         
-        // get format from compositor for multi-gpu rendering
-        let format = self.compositor.as_ref().map(|c| c.format());
-        
         // get appropriate renderer
-        let mut renderer = if render_node != self.target_node && format.is_some() {
+        let mut renderer = if render_node != self.target_node {
             // multi-gpu case
-            self.api.renderer(&render_node, &self.target_node, format.unwrap())
+            self.api.renderer(&render_node, &self.target_node, format)
                 .map_err(|e| anyhow::anyhow!("Failed to get multi-gpu renderer: {}", e))?
         } else {
             // single-gpu case
@@ -527,22 +603,77 @@ impl SurfaceThreadState {
                 .map_err(|e| anyhow::anyhow!("Failed to get single-gpu renderer: {}", e))?
         };
         
-        // now use the compositor
-        let compositor = self.compositor.as_mut().unwrap();
+        // Phase 2jb: Render to offscreen texture using PostprocessState
+        // This follows cosmic-comp's approach exactly
+        // Use the already obtained renderer for texture operations  
+        let postprocess = self.postprocess.as_mut().unwrap();
+        let transform = self.output.current_transform();
         
-        // use compositor's render_frame method which handles damage tracking internally
-        // this is the proper way to render with DrmOutput
-        let frame_result = compositor.render_frame(
+        let _damage = postprocess.texture.render()
+            .draw(|texture| {
+                // bind the texture as our render target
+                let mut fb = renderer.bind(texture)
+                    .map_err(|e| anyhow::anyhow!("Failed to bind texture: {:?}", e))?;
+                
+                // buffer age tells us how many frames ago this buffer was last used
+                // for offscreen textures, we use age 1 (always redraw everything for now)
+                let age = 1; // Phase 2je will track this properly
+                
+                // use OutputDamageTracker to render with damage tracking
+                let res = match postprocess.damage_tracker.render_output(
+                    &mut renderer,
+                    &mut fb,
+                    age,
+                    &elements,
+                    crate::backend::render::CLEAR_COLOR,
+                ) {
+                    Ok(res) => res,
+                    Err(RenderError::Rendering(err)) => return Err(anyhow::anyhow!("Render error: {:?}", err)),
+                    Err(RenderError::OutputNoMode(_)) => unreachable!("Output has mode"),
+                };
+                
+                // wait for rendering to complete
+                renderer.wait(&res.sync)
+                    .map_err(|e| anyhow::anyhow!("Failed to wait for sync: {:?}", e))?;
+                
+                // unbind the texture
+                std::mem::drop(fb);
+                
+                // return damage regions
+                let area = texture.size().to_logical(1, transform);
+                
+                Ok(res.damage
+                    .cloned()
+                    .map(|v| {
+                        v.into_iter()
+                            .map(|r| r.to_logical(1).to_buffer(1, transform, &area))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default())
+            })
+            .context("Failed to draw to offscreen render target")?;
+        
+        // now we need to present the texture to the display
+        // for now, just present an empty frame - Phase 2jc will properly composite the texture
+        // cosmic-comp uses postprocess_elements() to create elements from the texture
+        
+        // use the multi-gpu renderer to present
+        // specify the element type explicitly to help the compiler
+        let empty_elements: Vec<SolidColorRenderElement> = Vec::new();
+        let frame_result = self.compositor.as_mut().unwrap().render_frame(
             &mut renderer,
-            &elements,
+            &empty_elements,
             crate::backend::render::CLEAR_COLOR,
-            FrameFlags::empty(),  // no special flags for now
+            FrameFlags::empty(),
         ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
         
         // queue the frame for presentation if there's content
         if !frame_result.is_empty {
-            // for now, no presentation feedback (Phase 2k will add proper timing)
-            compositor.queue_frame(())  // unit type for no user data
+            // store damage for next frame (currently empty)
+            self.last_frame_damage = Some(Vec::new());  // Phase 2je will track properly
+            
+            // queue for presentation (Phase 2k will add proper timing)
+            self.compositor.as_mut().unwrap().queue_frame(())
                 .map_err(|e| anyhow::anyhow!("Failed to queue frame: {:?}", e))?;
             
             // update state to wait for vblank
@@ -550,9 +681,9 @@ impl SurfaceThreadState {
                 redraw_needed: false,
             };
             
-            trace!("Frame queued for output {}, empty: {}", 
+            trace!("Frame queued for output {}, damage regions: {}", 
                 self.output.name(), 
-                frame_result.is_empty
+                self.last_frame_damage.as_ref().map(|d| d.len()).unwrap_or(0)
             );
         } else {
             trace!("Empty frame for output {}, skipping", self.output.name());

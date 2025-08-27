@@ -173,31 +173,6 @@ pub type GlMultiFrame<'a, 'frame, 'buffer> =
 #[allow(dead_code)] // will be used for multi-GPU error handling
 pub type GlMultiError = MultiError<GbmGlowBackend<DrmDeviceFd>, GbmGlowBackend<DrmDeviceFd>>;
 
-/// Renderer reference that can be either single-GPU or multi-GPU
-#[allow(dead_code)] // will be used in Phase 2f for surface rendering
-pub enum RendererRef<'a> {
-    Glow(&'a mut GlowRenderer),
-    GlMulti(GlMultiRenderer<'a>),
-}
-
-impl<'a> AsRef<GlowRenderer> for RendererRef<'a> {
-    fn as_ref(&self) -> &GlowRenderer {
-        match self {
-            Self::Glow(renderer) => renderer,
-            Self::GlMulti(renderer) => renderer.as_ref(),
-        }
-    }
-}
-
-impl<'a> AsMut<GlowRenderer> for RendererRef<'a> {
-    fn as_mut(&mut self) -> &mut GlowRenderer {
-        match self {
-            Self::Glow(renderer) => renderer,
-            Self::GlMulti(renderer) => renderer.as_mut(),
-        }
-    }
-}
-
 /// Initialize shaders for the renderer
 #[allow(dead_code)] // will be used in Phase 2f
 #[allow(unused_variables)] // will be used when we add custom shaders
