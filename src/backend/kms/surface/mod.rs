@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod timings;
+
 use anyhow::{Context, Result};
 use smithay::{
     backend::{
@@ -12,7 +14,7 @@ use smithay::{
             compositor::FrameFlags,
             exporter::gbm::GbmFramebufferExporter,
             output::DrmOutput,
-            DrmDeviceFd, DrmNode,
+            DrmDeviceFd, DrmNode, DrmEventMetadata, DrmEventTime,
         },
         egl::EGLContext,
         renderer::{
@@ -32,6 +34,7 @@ use smithay::{
     reexports::{
         calloop::{
             channel::{channel, Channel, Event, Sender},
+            timer::{Timer, TimeoutAction},
             LoopHandle, RegistrationToken,
         },
         drm::control::{connector, crtc},
@@ -44,14 +47,16 @@ use crate::backend::render::{
     element::{AsGlowRenderer, CosmicElement},
     GlMultiRenderer,
 };
+use self::timings::Timings;
 use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
     },
+    time::Duration,
 };
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 /// Type alias for our DRM output - following cosmic-comp's definition
 /// Simplified version without presentation feedback for now
@@ -83,7 +88,7 @@ pub enum ThreadCommand {
     /// Schedule a render frame
     ScheduleRender,
     /// VBlank event occurred
-    VBlank,
+    VBlank(Option<DrmEventMetadata>),
     /// End the thread
     End,
 }
@@ -162,6 +167,13 @@ pub enum QueueState {
     WaitingForVBlank {
         redraw_needed: bool,
     },
+    /// We did not submit anything to KMS and made a timer to fire at the estimated VBlank
+    WaitingForEstimatedVBlank(RegistrationToken),
+    /// A redraw is queued on top of the above
+    WaitingForEstimatedVBlankAndQueued {
+        estimated_vblank: RegistrationToken,
+        queued_render: RegistrationToken,
+    },
 }
 
 impl Default for QueueState {
@@ -188,6 +200,7 @@ struct SurfaceThreadState {
     // scheduling
     state: QueueState,
     thread_sender: Sender<SurfaceCommand>,
+    timings: Timings,
     
     // output info
     output: Output,
@@ -296,8 +309,8 @@ impl Surface {
     
     /// Handle VBlank event
     #[allow(dead_code)] // will be used for vblank handling
-    pub fn on_vblank(&self) {
-        let _ = self.thread_command.send(ThreadCommand::VBlank);
+    pub fn on_vblank(&self, metadata: Option<DrmEventMetadata>) {
+        let _ = self.thread_command.send(ThreadCommand::VBlank(metadata));
     }
     
     /// Check if the surface is active
@@ -455,6 +468,16 @@ fn surface_thread(
     // get stop signal for the event loop
     let signal = event_loop.get_signal();
     
+    let clock = Clock::new();
+    
+    // initialize frame timings
+    let refresh_interval = output.current_mode().map(|mode| {
+        // smithay's Mode has refresh in millihertz
+        let refresh_rate = mode.refresh as f64 / 1000.0;
+        Duration::from_secs_f64(1.0 / refresh_rate)
+    });
+    let timings = Timings::new(refresh_interval, None, false, target_node.clone());
+    
     let mut state = SurfaceThreadState {
         api,
         primary_node,
@@ -466,9 +489,10 @@ fn surface_thread(
         frame_count: 0,
         state: QueueState::Idle,
         thread_sender,
+        timings,
         output,
         loop_handle: event_loop.handle(),
-        clock: Clock::new(),
+        clock,
     };
     
     // register command handler
@@ -489,8 +513,8 @@ fn surface_thread(
             Event::Msg(ThreadCommand::ScheduleRender) => {
                 _state.queue_redraw();
             }
-            Event::Msg(ThreadCommand::VBlank) => {
-                _state.on_vblank();
+            Event::Msg(ThreadCommand::VBlank(metadata)) => {
+                _state.on_vblank(metadata);
             }
             Event::Msg(ThreadCommand::End) => {
                 signal.stop();
@@ -511,6 +535,16 @@ fn surface_thread(
 impl SurfaceThreadState {
     fn resume(&mut self, compositor: GbmDrmOutput) {
         debug!("Resuming surface {}", self.output.name());
+        
+        // update refresh interval from actual DRM mode
+        let mode = compositor.with_compositor(|c| c.surface().pending_mode());
+        let interval = Duration::from_secs_f64(1.0 / crate::backend::kms::drm_helpers::calculate_refresh_rate(mode) as f64);
+        self.timings.set_refresh_interval(Some(interval));
+        
+        // set minimum refresh interval (30Hz minimum like cosmic-comp)
+        const SAFETY_MARGIN: u32 = 2; // magic two frames margin from kwin
+        let min_min_refresh_interval = Duration::from_secs_f64(1.0 / 30.0); // 30Hz
+        self.timings.set_min_refresh_interval(Some(min_min_refresh_interval));
         
         // create PostprocessState if not already done
         if self.postprocess.is_none() && self.output.current_mode().is_some() {
@@ -554,48 +588,137 @@ impl SurfaceThreadState {
     
     
     fn queue_redraw(&mut self) {
-        // Phase 2jd: Hook up redraw() to be called
-        // Phase 2k will add proper timing, for now just call directly
-        if self.compositor.is_some() {
-            match self.state {
-                QueueState::Idle => {
-                    debug!("Queueing redraw for {}", self.output.name());
-                    // call redraw immediately for now
-                    // Phase 2k will add proper timer scheduling
-                    if let Err(err) = self.redraw() {
-                        error!("Failed to redraw: {}", err);
-                    }
+        self.queue_redraw_force(false);
+    }
+    
+    fn queue_redraw_force(&mut self, force: bool) {
+        let Some(_compositor) = self.compositor.as_mut() else {
+            return;
+        };
+        
+        if let QueueState::WaitingForVBlank { .. } = &self.state {
+            // we're waiting for VBlank, request a redraw afterwards.
+            self.state = QueueState::WaitingForVBlank {
+                redraw_needed: true,
+            };
+            return;
+        }
+        
+        if !force {
+            match &self.state {
+                QueueState::Idle | QueueState::WaitingForEstimatedVBlank(_) => {}
+                
+                // a redraw is already queued.
+                QueueState::Queued(_) | QueueState::WaitingForEstimatedVBlankAndQueued { .. } => {
+                    return;
                 }
-                QueueState::WaitingForVBlank { .. } => {
-                    self.state = QueueState::WaitingForVBlank {
-                        redraw_needed: true,
-                    };
+                _ => {},
+            };
+        }
+        
+        let estimated_presentation = self.timings.next_presentation_time(&self.clock);
+        let render_start = self.timings.next_render_time(&self.clock);
+        
+        let timer = if render_start.is_zero() {
+            trace!("Running late for frame.");
+            Timer::immediate()
+        } else {
+            Timer::from_duration(render_start)
+        };
+        
+        let token = self
+            .loop_handle
+            .insert_source(timer, move |_time, _, state| {
+                state.timings.start_render(&state.clock);
+                if let Err(err) = state.redraw(estimated_presentation) {
+                    let name = state.output.name();
+                    warn!(?name, "Failed to submit rendering: {:?}", err);
+                    state.queue_redraw_force(true);
                 }
-                _ => {}
+                TimeoutAction::Drop
+            })
+            .expect("Failed to schedule render");
+        
+        match &self.state {
+            QueueState::Idle => {
+                self.state = QueueState::Queued(token);
             }
+            QueueState::WaitingForEstimatedVBlank(estimated_vblank) => {
+                self.state = QueueState::WaitingForEstimatedVBlankAndQueued {
+                    estimated_vblank: estimated_vblank.clone(),
+                    queued_render: token,
+                };
+            }
+            QueueState::Queued(old_token) if force => {
+                self.loop_handle.remove(*old_token);
+                self.state = QueueState::Queued(token);
+            }
+            QueueState::WaitingForEstimatedVBlankAndQueued {
+                estimated_vblank,
+                queued_render,
+            } if force => {
+                self.loop_handle.remove(*queued_render);
+                self.state = QueueState::WaitingForEstimatedVBlankAndQueued {
+                    estimated_vblank: estimated_vblank.clone(),
+                    queued_render: token,
+                };
+            }
+            _ => {},
         }
     }
     
-    fn on_vblank(&mut self) {
-        // Phase 2jd: VBlank handler calls queue_redraw if needed
-        match &self.state {
+    fn on_vblank(&mut self, metadata: Option<DrmEventMetadata>) {
+        let Some(compositor) = self.compositor.as_mut() else {
+            return;
+        };
+        if matches!(self.state, QueueState::Idle) {
+            // can happen right after resume
+            return;
+        }
+        
+        let now = self.clock.now();
+        let presentation_time = match metadata.as_ref().map(|data| &data.time) {
+            Some(DrmEventTime::Monotonic(tp)) => Some(tp.clone()),
+            _ => None,
+        };
+        
+        // mark last frame completed
+        if let Ok(Some(_userdata)) = compositor.frame_submitted() {
+            let clock = if let Some(tp) = presentation_time {
+                tp.into()  // convert Duration to Time<Monotonic>
+            } else {
+                now
+            };
+            self.timings.presented(clock);
+        }
+        
+        // handle queue state transitions based on VBlank
+        let redraw_needed = match &self.state {
             QueueState::WaitingForVBlank { redraw_needed } => {
-                if *redraw_needed {
-                    // another redraw was requested while waiting
-                    self.state = QueueState::Idle;
-                    self.queue_redraw();
-                } else {
-                    self.state = QueueState::Idle;
-                }
+                *redraw_needed
             }
-            _ => {
-                self.state = QueueState::Idle;
+            QueueState::WaitingForEstimatedVBlank(token) => {
+                self.loop_handle.remove(*token);
+                false
             }
+            QueueState::WaitingForEstimatedVBlankAndQueued { estimated_vblank, queued_render } => {
+                self.loop_handle.remove(*estimated_vblank);
+                self.state = QueueState::Queued(*queued_render);
+                return;
+            }
+            _ => false,
+        };
+        
+        self.state = QueueState::Idle;
+        self.frame_count = self.frame_count.saturating_add(1);
+        
+        if redraw_needed {
+            self.queue_redraw();
         }
     }
     
     /// Perform a redraw with damage tracking using PostprocessState
-    fn redraw(&mut self) -> Result<()> {
+    fn redraw(&mut self, _estimated_presentation: Duration) -> Result<()> {
         // check we have a compositor first
         if self.compositor.is_none() {
             return Ok(());
@@ -610,6 +733,9 @@ impl SurfaceThreadState {
         // for now, just render a clear color
         // Phase 2m will add actual element rendering
         let elements: Vec<SolidColorRenderElement> = Vec::new();
+        
+        // mark element gathering done
+        self.timings.elements_done(&self.clock);
         
         // get format and render node before mutable borrows
         let format = self.compositor.as_ref().unwrap().format();
@@ -662,6 +788,9 @@ impl SurfaceThreadState {
                 // unbind the texture
                 std::mem::drop(fb);
                 
+                // mark drawing done
+                self.timings.draw_done(&self.clock);
+                
                 // Phase 2je: Return and accumulate damage regions
                 let area = texture.size().to_logical(1, transform);
                 
@@ -711,7 +840,10 @@ impl SurfaceThreadState {
         if !frame_result.is_empty {
             // Phase 2je: damage is already stored in the render closure above
             
-            // queue for presentation (Phase 2k will add proper timing)
+            // mark submission time
+            self.timings.submitted_for_presentation(&self.clock);
+            
+            // queue for presentation with userdata for tracking
             self.compositor.as_mut().unwrap().queue_frame(())
                 .map_err(|e| anyhow::anyhow!("Failed to queue frame: {:?}", e))?;
             
