@@ -28,6 +28,7 @@ pub struct PendingFrame {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // fields will be used for timing analysis
 pub struct Frame {
     pub render_start: Time<Monotonic>,
     pub render_duration_elements: Duration,
@@ -37,6 +38,7 @@ pub struct Frame {
 }
 
 impl Frame {
+    #[allow(dead_code)] // will be used for performance analysis
     fn render_time(&self) -> Duration {
         self.render_duration_elements + self.render_duration_draw
     }
@@ -50,6 +52,7 @@ impl Frame {
     }
 }
 
+#[allow(dead_code)] // many methods will be used in later phases
 impl Timings {
     const CLEANUP: usize = 360;
 

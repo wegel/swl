@@ -542,7 +542,7 @@ impl SurfaceThreadState {
         self.timings.set_refresh_interval(Some(interval));
         
         // set minimum refresh interval (30Hz minimum like cosmic-comp)
-        const SAFETY_MARGIN: u32 = 2; // magic two frames margin from kwin
+        const _SAFETY_MARGIN: u32 = 2; // magic two frames margin from kwin (unused for now)
         let min_min_refresh_interval = Duration::from_secs_f64(1.0 / 30.0); // 30Hz
         self.timings.set_min_refresh_interval(Some(min_min_refresh_interval));
         
@@ -730,7 +730,8 @@ impl SurfaceThreadState {
             return Ok(());
         }
         
-        // for now, just render a clear color
+        // Phase 2l: Render a visible clear color to verify the render loop works
+        // We'll render a dark blue background to test
         // Phase 2m will add actual element rendering
         let elements: Vec<SolidColorRenderElement> = Vec::new();
         
