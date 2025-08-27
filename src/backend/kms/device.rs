@@ -9,13 +9,14 @@ use smithay::{
         renderer::glow::GlowRenderer,
         session::Session,
     },
+    output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{LoopHandle, RegistrationToken},
-        drm::control::{connector, crtc},
+        drm::control::{connector, crtc, ModeTypeFlags},
         gbm::BufferObjectFlags as GbmBufferFlags,
         rustix::fs::OFlags,
     },
-    utils::DeviceFd,
+    utils::{DeviceFd, Point, Transform},
 };
 use std::{
     collections::HashMap,
@@ -45,9 +46,9 @@ pub struct Device {
     pub supports_atomic: bool,
     pub event_token: Option<RegistrationToken>,
     
-    // track outputs and surfaces (will be filled in later phases)
-    pub outputs: HashMap<connector::Handle, ()>,  // placeholder
-    pub surfaces: HashMap<crtc::Handle, ()>,      // placeholder
+    // track outputs and surfaces
+    pub outputs: HashMap<connector::Handle, Output>,
+    pub surfaces: HashMap<crtc::Handle, ()>,      // placeholder for Phase 2f3
 }
 
 impl fmt::Debug for Device {
@@ -81,6 +82,52 @@ pub fn init_egl(gbm: &GbmDevice<DrmDeviceFd>) -> Result<EGLInternals> {
 }
 
 impl Device {
+    /// Scan for connected outputs and create them
+    pub fn scan_outputs(&mut self) -> Result<()> {
+        use smithay::reexports::drm::control::Device as ControlDevice;
+        
+        let connectors = self.drm.resource_handles()
+            .with_context(|| "Failed to get resource handles")?
+            .connectors()
+            .to_vec();
+        
+        for conn in connectors {
+            let conn_info = match self.drm.get_connector(conn, false) {
+                Ok(info) => info,
+                Err(err) => {
+                    warn!(?err, ?conn, "Failed to get connector info");
+                    continue;
+                }
+            };
+            
+            if conn_info.state() == connector::State::Connected {
+                match create_output_for_conn(&mut self.drm, conn) {
+                    Ok(output) => {
+                        if let Err(err) = populate_modes(&mut self.drm, &output, conn) {
+                            warn!(?err, ?conn, "Failed to populate modes");
+                            continue;
+                        }
+                        
+                        let output_name = output.name();
+                        info!("Detected output: {} ({}x{} @ {}Hz)", 
+                            output_name,
+                            output.current_mode().map(|m| m.size.w).unwrap_or(0),
+                            output.current_mode().map(|m| m.size.h).unwrap_or(0),
+                            output.current_mode().map(|m| m.refresh).unwrap_or(0),
+                        );
+                        
+                        self.outputs.insert(conn, output);
+                    }
+                    Err(err) => {
+                        warn!(?err, ?conn, "Failed to create output");
+                    }
+                }
+            }
+        }
+        
+        info!("Found {} connected output(s)", self.outputs.len());
+        Ok(())
+    }
     /// Update EGL context and add to GPU manager when device is in use
     pub fn update_egl(
         &mut self,
@@ -213,4 +260,102 @@ impl Device {
             surfaces: HashMap::new(),
         })
     }
+}
+
+/// Create an output for a DRM connector
+fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle) -> Result<Output> {
+    use smithay::reexports::drm::control::Device as ControlDevice;
+    
+    let conn_info = drm
+        .get_connector(conn, false)
+        .with_context(|| "Failed to query connector info")?;
+    let interface = super::drm_helpers::interface_name(drm, conn)?;
+    let edid_info = super::drm_helpers::edid_info(drm, conn)
+        .inspect_err(|err| warn!(?err, "failed to get EDID for {}", interface))
+        .ok();
+    let (phys_w, phys_h) = conn_info.size().unwrap_or((0, 0));
+
+    let output = Output::new(
+        interface,
+        PhysicalProperties {
+            size: (phys_w as i32, phys_h as i32).into(),
+            subpixel: match conn_info.subpixel() {
+                connector::SubPixel::HorizontalRgb => Subpixel::HorizontalRgb,
+                connector::SubPixel::HorizontalBgr => Subpixel::HorizontalBgr,
+                connector::SubPixel::VerticalRgb => Subpixel::VerticalRgb,
+                connector::SubPixel::VerticalBgr => Subpixel::VerticalBgr,
+                connector::SubPixel::None => Subpixel::None,
+                _ => Subpixel::Unknown,
+            },
+            make: edid_info
+                .as_ref()
+                .and_then(|info| info.make())
+                .unwrap_or_else(|| String::from("Unknown")),
+            model: edid_info
+                .as_ref()
+                .and_then(|info| info.model())
+                .unwrap_or_else(|| String::from("Unknown")),
+        },
+    );
+    Ok(output)
+}
+
+/// Populate available modes for an output
+fn populate_modes(
+    drm: &mut DrmDevice,
+    output: &Output,
+    conn: connector::Handle,
+) -> Result<()> {
+    use smithay::reexports::drm::control::Device as ControlDevice;
+    
+    let conn_info = drm.get_connector(conn, false)?;
+    let Some(mode) = conn_info
+        .modes()
+        .iter()
+        .find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED))
+        .copied()
+        .or(conn_info.modes().get(0).copied())
+    else {
+        anyhow::bail!("No mode found");
+    };
+
+    let refresh_rate = super::drm_helpers::calculate_refresh_rate(mode);
+    let output_mode = OutputMode {
+        size: (mode.size().0 as i32, mode.size().1 as i32).into(),
+        refresh: refresh_rate as i32,
+    };
+
+    // Add all available modes
+    let mut modes = Vec::new();
+    for mode in conn_info.modes() {
+        let refresh_rate = super::drm_helpers::calculate_refresh_rate(*mode);
+        let mode = OutputMode {
+            size: (mode.size().0 as i32, mode.size().1 as i32).into(),
+            refresh: refresh_rate as i32,
+        };
+        modes.push(mode.clone());
+        output.add_mode(mode);
+    }
+    
+    // Remove any modes that no longer exist
+    for mode in output
+        .modes()
+        .into_iter()
+        .filter(|mode| !modes.contains(&mode))
+    {
+        output.delete_mode(mode);
+    }
+    output.set_preferred(output_mode);
+
+    // Set initial configuration
+    let scale = 1.0; // simplified - cosmic-comp has complex scale calculation
+    let transform = Transform::Normal; // simplified - cosmic-comp reads panel orientation
+    output.change_current_state(
+        Some(output_mode),
+        Some(transform),
+        Some(Scale::Fractional(scale)),
+        Some(Point::from((0, 0))), // simplified - cosmic-comp calculates position
+    );
+
+    Ok(())
 }

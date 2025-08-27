@@ -122,6 +122,11 @@ impl State {
                     tracing::warn!("Failed to initialize EGL for device {:?}: {}", drm_node, err);
                 }
                 
+                // scan for connected outputs
+                if let Err(err) = device.scan_outputs() {
+                    tracing::warn!("Failed to scan outputs for device {:?}: {}", drm_node, err);
+                }
+                
                 kms.drm_devices.insert(drm_node, device);
                 Ok(())
             }
