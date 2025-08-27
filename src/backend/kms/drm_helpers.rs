@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use tracing::{info, debug};
 
 /// Find existing display configuration from the DRM device
-#[allow(dead_code)] // will be used for output management in Phase 2f
 pub fn display_configuration(
     device: &mut impl ControlDevice,
     _supports_atomic: bool,

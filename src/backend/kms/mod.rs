@@ -2,6 +2,7 @@
 
 mod device;
 mod drm_helpers;
+pub mod surface;
 
 use crate::{
     backend::render::GbmGlowBackend,

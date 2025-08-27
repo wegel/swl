@@ -48,7 +48,8 @@ pub struct Device {
     
     // track outputs and surfaces
     pub outputs: HashMap<connector::Handle, Output>,
-    pub surfaces: HashMap<crtc::Handle, ()>,      // placeholder for Phase 2f3
+    pub surfaces: HashMap<crtc::Handle, connector::Handle>,  // maps CRTC to connector
+    pub surface_manager: super::surface::SurfaceManager,
 }
 
 impl fmt::Debug for Device {
@@ -86,12 +87,10 @@ impl Device {
     pub fn scan_outputs(&mut self) -> Result<()> {
         use smithay::reexports::drm::control::Device as ControlDevice;
         
-        let connectors = self.drm.resource_handles()
-            .with_context(|| "Failed to get resource handles")?
-            .connectors()
-            .to_vec();
+        // get display configuration (connector -> CRTC mapping)
+        let display_config = super::drm_helpers::display_configuration(&mut self.drm, self.supports_atomic)?;
         
-        for conn in connectors {
+        for (conn, maybe_crtc) in display_config {
             let conn_info = match self.drm.get_connector(conn, false) {
                 Ok(info) => info,
                 Err(err) => {
@@ -101,6 +100,11 @@ impl Device {
             };
             
             if conn_info.state() == connector::State::Connected {
+                let Some(crtc) = maybe_crtc else {
+                    warn!("No CRTC available for connector {:?}", conn);
+                    continue;
+                };
+                
                 match create_output_for_conn(&mut self.drm, conn) {
                     Ok(output) => {
                         if let Err(err) = populate_modes(&mut self.drm, &output, conn) {
@@ -109,14 +113,20 @@ impl Device {
                         }
                         
                         let output_name = output.name();
-                        info!("Detected output: {} ({}x{} @ {}Hz)", 
+                        info!("Detected output: {} ({}x{} @ {}Hz) on CRTC {:?}", 
                             output_name,
                             output.current_mode().map(|m| m.size.w).unwrap_or(0),
                             output.current_mode().map(|m| m.size.h).unwrap_or(0),
                             output.current_mode().map(|m| m.refresh).unwrap_or(0),
+                            crtc,
                         );
                         
+                        // create surface for the output
+                        self.surface_manager.create_surface(output.clone(), crtc, conn);
+                        
+                        // store output and crtc mapping
                         self.outputs.insert(conn, output);
+                        self.surfaces.insert(crtc, conn);
                     }
                     Err(err) => {
                         warn!(?err, ?conn, "Failed to create output");
@@ -258,6 +268,7 @@ impl Device {
             event_token: Some(token),
             outputs: HashMap::new(),
             surfaces: HashMap::new(),
+            surface_manager: super::surface::SurfaceManager::new(),
         })
     }
 }
