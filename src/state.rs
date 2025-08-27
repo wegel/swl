@@ -2,7 +2,10 @@
 
 use crate::backend::kms::KmsState;
 use smithay::{
-    backend::input::InputEvent,
+    backend::{
+        input::InputEvent,
+        session::Session,
+    },
     reexports::{
         calloop::{LoopHandle, LoopSignal},
         wayland_server::{Display, DisplayHandle},
@@ -75,5 +78,34 @@ impl State {
     pub fn process_input_event(&mut self, event: InputEvent<impl smithay::backend::input::InputBackend>) {
         // we'll handle input processing in a later phase
         let _ = event;
+    }
+    
+    /// Handle device addition (stub for now - will be filled in Phase 2c)
+    pub fn device_added(&mut self, dev: libc::dev_t, path: &std::path::Path, _dh: &DisplayHandle) -> anyhow::Result<()> {
+        tracing::info!("Device added: {} ({})", path.display(), dev);
+        
+        // check if session is active
+        if let BackendData::Kms(kms) = &self.backend {
+            if !kms.session.is_active() {
+                return Ok(());
+            }
+        }
+        
+        // we'll actually handle the device in Phase 2c
+        Ok(())
+    }
+    
+    /// Handle device change (stub for now)
+    pub fn device_changed(&mut self, dev: libc::dev_t) -> anyhow::Result<()> {
+        tracing::debug!("Device changed: {}", dev);
+        // we'll handle this in a later phase
+        Ok(())
+    }
+    
+    /// Handle device removal (stub for now)
+    pub fn device_removed(&mut self, dev: libc::dev_t, _dh: &DisplayHandle) -> anyhow::Result<()> {
+        tracing::info!("Device removed: {}", dev);
+        // we'll handle this in a later phase  
+        Ok(())
     }
 }

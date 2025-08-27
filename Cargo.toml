@@ -15,7 +15,12 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "backend_libinput",
     "backend_session_libseat",
     "backend_udev",
+    "backend_drm",
 ] }
+
+# Dependencies for backend
+indexmap = "2.10"
+libc = "0.2"
 
 # Event loop
 calloop = { version = "0.14.2", features = ["executor"] }
