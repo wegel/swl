@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use tracing::{info, debug};
 
 /// Find existing display configuration from the DRM device
+#[allow(dead_code)] // will be used for output management in Phase 2f
 pub fn display_configuration(
     device: &mut impl ControlDevice,
     _supports_atomic: bool,
@@ -67,6 +68,7 @@ pub fn display_configuration(
 }
 
 /// Detect primary GPU based on boot_vga flag
+#[allow(dead_code)] // will be used for multi-GPU support
 pub fn find_primary_gpu(nodes: &[DrmNode]) -> Option<DrmNode> {
     // check for boot_vga flag to identify primary GPU
     for node in nodes {

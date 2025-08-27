@@ -34,6 +34,7 @@ pub struct EGLInternals {
 
 /// A DRM device with rendering capabilities
 pub struct Device {
+    #[allow(dead_code)] // will be used for mode setting in Phase 2f
     pub drm: DrmDevice,
     pub drm_node: DrmNode,
     pub gbm: GbmDevice<DrmDeviceFd>,

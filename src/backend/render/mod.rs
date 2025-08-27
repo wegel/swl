@@ -69,6 +69,7 @@ impl<A: AsFd + Clone + Send + 'static> GbmGlowBackend<A> {
 #[derive(Debug, thiserror::Error)]
 pub enum GbmGlowError {
     #[error("Failed to allocate buffer")]
+    #[allow(dead_code)] // may be used when allocation fails
     Allocation,
     #[error("Rendering error: {0}")]
     Render(#[from] smithay::backend::renderer::gles::GlesError),
@@ -154,12 +155,58 @@ impl ApiDevice for GbmGlowDevice {
     }
 }
 
+pub mod element;
+
+use smithay::backend::{
+    drm::DrmDeviceFd,
+    renderer::{
+        multigpu::{MultiFrame, MultiRenderer, Error as MultiError},
+    },
+};
+
+/// Type aliases for multi-GPU rendering
+pub type GlMultiRenderer<'a> = 
+    MultiRenderer<'a, 'a, GbmGlowBackend<DrmDeviceFd>, GbmGlowBackend<DrmDeviceFd>>;
+#[allow(dead_code)] // will be used for multi-GPU rendering
+pub type GlMultiFrame<'a, 'frame, 'buffer> =
+    MultiFrame<'a, 'a, 'frame, 'buffer, GbmGlowBackend<DrmDeviceFd>, GbmGlowBackend<DrmDeviceFd>>;
+#[allow(dead_code)] // will be used for multi-GPU error handling
+pub type GlMultiError = MultiError<GbmGlowBackend<DrmDeviceFd>, GbmGlowBackend<DrmDeviceFd>>;
+
+/// Renderer reference that can be either single-GPU or multi-GPU
+#[allow(dead_code)] // will be used in Phase 2f for surface rendering
+pub enum RendererRef<'a> {
+    Glow(&'a mut GlowRenderer),
+    GlMulti(GlMultiRenderer<'a>),
+}
+
+impl<'a> AsRef<GlowRenderer> for RendererRef<'a> {
+    fn as_ref(&self) -> &GlowRenderer {
+        match self {
+            Self::Glow(renderer) => renderer,
+            Self::GlMulti(renderer) => renderer.as_ref(),
+        }
+    }
+}
+
+impl<'a> AsMut<GlowRenderer> for RendererRef<'a> {
+    fn as_mut(&mut self) -> &mut GlowRenderer {
+        match self {
+            Self::Glow(renderer) => renderer,
+            Self::GlMulti(renderer) => renderer.as_mut(),
+        }
+    }
+}
+
 /// Initialize shaders for the renderer
-pub fn init_shaders(_renderer: &mut GlowRenderer) -> Result<(), anyhow::Error> {
-    // smithay's GlowRenderer handles shader compilation internally
-    // shaders are compiled on first use
+#[allow(dead_code)] // will be used in Phase 2f
+#[allow(unused_variables)] // will be used when we add custom shaders
+pub fn init_shaders(renderer: &mut GlowRenderer) -> Result<(), anyhow::Error> {
+    // for now, just ensure the default shaders are compiled
+    // we'll add custom shaders in later phases
     Ok(())
 }
 
 /// Clear color for empty frames
-pub const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
+#[allow(dead_code)] // will be used in Phase 2g for clearing frames
+pub const CLEAR_COLOR: smithay::backend::renderer::Color32F = smithay::backend::renderer::Color32F::new(0.1, 0.1, 0.1, 1.0);
