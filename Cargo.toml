@@ -19,6 +19,7 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "backend_gbm",
     "backend_egl",
     "renderer_glow",
+    "renderer_multi",
 ] }
 
 # Dependencies for backend

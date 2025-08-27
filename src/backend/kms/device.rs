@@ -3,14 +3,16 @@
 use anyhow::{Context, Result};
 use smithay::{
     backend::{
-        allocator::gbm::GbmDevice,
+        allocator::gbm::{GbmAllocator, GbmDevice},
         drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode},
         egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority},
+        renderer::glow::GlowRenderer,
         session::Session,
     },
     reexports::{
         calloop::{LoopHandle, RegistrationToken},
         drm::control::{connector, crtc},
+        gbm::BufferObjectFlags as GbmBufferFlags,
         rustix::fs::OFlags,
     },
     utils::DeviceFd,
@@ -35,6 +37,8 @@ pub struct Device {
     pub drm: DrmDevice,
     pub drm_node: DrmNode,
     pub gbm: GbmDevice<DrmDeviceFd>,
+    pub allocator: Option<GbmAllocator<DrmDeviceFd>>,
+    pub renderer: Option<GlowRenderer>,
     pub egl: Option<EGLInternals>,
     pub render_node: DrmNode,
     pub supports_atomic: bool,
@@ -76,6 +80,54 @@ pub fn init_egl(gbm: &GbmDevice<DrmDeviceFd>) -> Result<EGLInternals> {
 }
 
 impl Device {
+    /// Update EGL context and add to GPU manager when device is in use
+    pub fn update_egl(
+        &mut self,
+        primary_node: Option<&DrmNode>,
+        api: &mut crate::backend::render::GbmGlowBackend<DrmDeviceFd>,
+    ) -> Result<bool> {
+        // for now, consider all devices in use if they exist
+        // in the future we'd check if this device has outputs
+        let in_use = primary_node.is_none() || primary_node == Some(&self.render_node);
+        
+        if in_use {
+            if self.egl.is_none() {
+                let egl = init_egl(&self.gbm)?;
+                
+                // create shared context for renderer
+                let shared_context = EGLContext::new_shared_with_priority(
+                    &egl.display,
+                    &egl.context,
+                    ContextPriority::High,
+                )?;
+                
+                let renderer = unsafe { GlowRenderer::new(shared_context) }?;
+                
+                // create allocator
+                let allocator = GbmAllocator::new(
+                    self.gbm.clone(),
+                    GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+                );
+                
+                self.allocator = Some(allocator.clone());
+                self.egl = Some(egl);
+                
+                // add to API
+                api.add_node(self.render_node, allocator, renderer);
+                self.renderer = None;  // renderer is moved to the API
+            }
+            Ok(true)
+        } else {
+            if self.egl.is_some() {
+                self.egl = None;
+                self.allocator = None;
+                self.renderer = None;
+                api.remove_node(&self.render_node);
+            }
+            Ok(false)
+        }
+    }
+    
     /// Create a new DRM device from a file descriptor
     pub fn new(
         session: &mut impl Session,
@@ -111,8 +163,8 @@ impl Device {
         let gbm = GbmDevice::new(fd)
             .with_context(|| format!("Failed to initialize GBM device for {}", path.display()))?;
         
-        // try to initialize EGL for rendering
-        let (egl, render_node) = match init_egl(&gbm) {
+        // try to initialize EGL temporarily to get render formats
+        let render_node = match init_egl(&gbm) {
             Ok(egl) => {
                 let render_node = egl
                     .device
@@ -122,17 +174,18 @@ impl Device {
                     .unwrap_or(drm_node);
                 
                 info!("EGL initialized, render node: {:?}", render_node);
-                (Some(egl), render_node)
+                // drop the EGL context for now, we'll recreate it later if needed
+                render_node
             }
             Err(err) => {
                 warn!("Failed to initialize EGL: {}", err);
-                (None, drm_node)
+                drm_node
             }
         };
         
         // register DRM event handler
         let token = event_loop
-            .insert_source(notifier, move |event, _metadata, state| {
+            .insert_source(notifier, move |event, _metadata, _state| {
                 match event {
                     DrmEvent::VBlank(crtc) => {
                         debug!("VBlank event for CRTC {:?}", crtc);
@@ -149,7 +202,9 @@ impl Device {
             drm,
             drm_node,
             gbm,
-            egl,
+            allocator: None,  // will be created when device is used
+            renderer: None,   // will be created when device is used
+            egl: None,        // will be created when device is used
             render_node,
             supports_atomic,
             event_token: Some(token),

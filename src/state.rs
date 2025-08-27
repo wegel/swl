@@ -108,13 +108,18 @@ impl State {
         
         // create the device
         match Device::new(&mut kms.session, path, dev, &self.loop_handle) {
-            Ok(device) => {
+            Ok(mut device) => {
                 tracing::info!("Successfully initialized DRM device: {:?}", drm_node);
                 
                 // set primary GPU if not set
                 if kms.primary_gpu.is_none() {
                     kms.primary_gpu = Some(drm_node.clone());
                     tracing::info!("Setting primary GPU: {:?}", drm_node);
+                }
+                
+                // update EGL and add to GPU manager if needed
+                if let Err(err) = device.update_egl(kms.primary_gpu.as_ref(), kms.gpu_manager.as_mut()) {
+                    tracing::warn!("Failed to initialize EGL for device {:?}: {}", drm_node, err);
                 }
                 
                 kms.drm_devices.insert(drm_node, device);
@@ -146,6 +151,9 @@ impl State {
         if let Ok(drm_node) = DrmNode::from_dev_id(dev) {
             if let Some(mut device) = kms.drm_devices.shift_remove(&drm_node) {
                 tracing::info!("Removing DRM device: {:?}", drm_node);
+                
+                // remove from GPU manager
+                kms.gpu_manager.as_mut().remove_node(&drm_node);
                 
                 // remove event source from event loop
                 if let Some(token) = device.event_token.take() {

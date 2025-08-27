@@ -3,14 +3,18 @@
 mod device;
 mod drm_helpers;
 
-use crate::state::{BackendData, State};
+use crate::{
+    backend::render::GbmGlowBackend,
+    state::{BackendData, State},
+};
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use smithay::{
     backend::{
-        drm::DrmNode,
+        drm::{DrmDeviceFd, DrmNode},
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
+        renderer::multigpu::GpuManager,
         session::{libseat::LibSeatSession, Event as SessionEvent, Session},
         udev::{UdevBackend, UdevEvent},
     },
@@ -26,13 +30,13 @@ use tracing::{debug, error, info, warn};
 pub use self::device::Device;
 
 /// KMS backend state
-#[derive(Debug)]
 pub struct KmsState {
     pub session: LibSeatSession,
     pub libinput: Libinput,
     pub drm_devices: IndexMap<DrmNode, Device>,
     pub input_devices: HashMap<String, input::Device>,
     pub primary_gpu: Option<DrmNode>,
+    pub gpu_manager: GpuManager<GbmGlowBackend<DrmDeviceFd>>,
 }
 
 pub fn init_backend(
@@ -72,6 +76,9 @@ pub fn init_backend(
         .map_err(|err| err.error)
         .context("Failed to initialize session event source")?;
     
+    // initialize GPU manager
+    let gpu_manager = GpuManager::new(GbmGlowBackend::new())?;
+    
     // finish backend initialization
     state.backend = BackendData::Kms(KmsState {
         session,
@@ -79,6 +86,7 @@ pub fn init_backend(
         drm_devices: IndexMap::new(),
         input_devices: HashMap::new(),
         primary_gpu: None,
+        gpu_manager,
     });
     
     // manually add already present gpus
