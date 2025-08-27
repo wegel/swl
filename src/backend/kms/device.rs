@@ -3,10 +3,21 @@
 use anyhow::{Context, Result};
 use smithay::{
     backend::{
-        allocator::gbm::{GbmAllocator, GbmDevice},
-        drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode},
+        allocator::{
+            gbm::{GbmAllocator, GbmDevice},
+            Fourcc,
+        },
+        drm::{
+            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode,
+            exporter::gbm::GbmFramebufferExporter,
+            output::{DrmOutputManager, LockedDrmOutputManager},
+        },
         egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority},
-        renderer::glow::GlowRenderer,
+        renderer::{
+            glow::GlowRenderer,
+            multigpu::GpuManager,
+            ImportDma,
+        },
         session::Session,
     },
     output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel},
@@ -33,10 +44,26 @@ pub struct EGLInternals {
     pub context: EGLContext,
 }
 
+/// Type alias for our locked DRM output manager
+pub type LockedGbmDrmOutputManager<'a> = LockedDrmOutputManager<
+    'a,
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    (),  // simplified - no presentation feedback yet
+    DrmDeviceFd,
+>;
+
+/// Type alias for our DRM output manager
+pub type GbmDrmOutputManager = DrmOutputManager<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    (),  // simplified - no presentation feedback yet
+    DrmDeviceFd,
+>;
+
 /// A DRM device with rendering capabilities
 pub struct Device {
-    #[allow(dead_code)] // will be used for mode setting in Phase 2f
-    pub drm: DrmDevice,
+    pub drm: GbmDrmOutputManager,  // now using DrmOutputManager
     pub drm_node: DrmNode,
     pub gbm: GbmDevice<DrmDeviceFd>,
     pub allocator: Option<GbmAllocator<DrmDeviceFd>>,
@@ -107,11 +134,12 @@ impl Device {
     pub fn scan_outputs(&mut self) -> Result<()> {
         use smithay::reexports::drm::control::Device as ControlDevice;
         
-        // get display configuration (connector -> CRTC mapping)
-        let display_config = super::drm_helpers::display_configuration(&mut self.drm, self.supports_atomic)?;
+        // get display configuration (connector -> CRTC mapping)  
+        // we need to access the underlying DrmDevice
+        let display_config = super::drm_helpers::display_configuration(self.drm.device_mut(), self.supports_atomic)?;
         
         for (conn, maybe_crtc) in display_config {
-            let conn_info = match self.drm.get_connector(conn, false) {
+            let conn_info = match self.drm.device().get_connector(conn, false) {
                 Ok(info) => info,
                 Err(err) => {
                     warn!(?err, ?conn, "Failed to get connector info");
@@ -125,9 +153,9 @@ impl Device {
                     continue;
                 };
                 
-                match create_output_for_conn(&mut self.drm, conn) {
+                match create_output_for_conn(self.drm.device_mut(), conn) {
                     Ok(output) => {
-                        if let Err(err) = populate_modes(&mut self.drm, &output, conn) {
+                        if let Err(err) = populate_modes(self.drm.device_mut(), &output, conn) {
                             warn!(?err, ?conn, "Failed to populate modes");
                             continue;
                         }
@@ -162,7 +190,7 @@ impl Device {
     pub fn update_egl(
         &mut self,
         primary_node: Option<&DrmNode>,
-        api: &mut crate::backend::render::GbmGlowBackend<DrmDeviceFd>,
+        gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>,
     ) -> Result<bool> {
         // for now, consider all devices in use if they exist
         // in the future we'd check if this device has outputs
@@ -190,9 +218,9 @@ impl Device {
                 self.allocator = Some(allocator.clone());
                 self.egl = Some(egl);
                 
-                // add to API
-                api.add_node(self.render_node, allocator, renderer);
-                self.renderer = None;  // renderer is moved to the API
+                // add to GPU manager's API
+                gpu_manager.as_mut().add_node(self.render_node, allocator, renderer);
+                self.renderer = None;  // renderer is moved to the GPU manager
             }
             Ok(true)
         } else {
@@ -200,7 +228,7 @@ impl Device {
                 self.egl = None;
                 self.allocator = None;
                 self.renderer = None;
-                api.remove_node(&self.render_node);
+                gpu_manager.as_mut().remove_node(&self.render_node);
             }
             Ok(false)
         }
@@ -212,6 +240,7 @@ impl Device {
         path: &Path,
         dev: libc::dev_t,
         event_loop: &LoopHandle<'static, crate::state::State>,
+        gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>,
     ) -> Result<Self> {
         info!("Initializing DRM device: {}", path.display());
         
@@ -225,11 +254,11 @@ impl Device {
         let fd = DrmDeviceFd::new(DeviceFd::from(fd));
         
         // initialize DRM device
-        let (drm, notifier) = DrmDevice::new(fd.clone(), false)
+        let (drm_device, notifier) = DrmDevice::new(fd.clone(), false)
             .with_context(|| format!("Failed to initialize drm device for: {}", path.display()))?;
         
         let drm_node = DrmNode::from_dev_id(dev)?;
-        let supports_atomic = drm.is_atomic();
+        let supports_atomic = drm_device.is_atomic();
         
         info!(
             "DRM device initialized: {:?}, atomic modesetting: {}",
@@ -242,7 +271,7 @@ impl Device {
             .with_context(|| format!("Failed to initialize GBM device for {}", path.display()))?;
         
         // try to initialize EGL temporarily to get render formats
-        let render_node = match init_egl(&gbm) {
+        let (render_node, render_formats) = match init_egl(&gbm) {
             Ok(egl) => {
                 let render_node = egl
                     .device
@@ -251,15 +280,48 @@ impl Device {
                     .and_then(std::convert::identity)
                     .unwrap_or(drm_node);
                 
+                // get render formats from the GPU manager if possible
+                let formats = gpu_manager.single_renderer(&render_node)
+                    .map(|r| r.dmabuf_formats())
+                    .unwrap_or_default();
+                
                 info!("EGL initialized, render node: {:?}", render_node);
                 // drop the EGL context for now, we'll recreate it later if needed
-                render_node
+                (render_node, formats)
             }
             Err(err) => {
                 warn!("Failed to initialize EGL: {}", err);
-                drm_node
+                (drm_node, Default::default())
             }
         };
+        
+        // create allocator for the DrmOutputManager
+        let allocator = GbmAllocator::new(
+            gbm.clone(),
+            GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+        );
+        
+        // create framebuffer exporter
+        let fb_exporter = GbmFramebufferExporter::new(
+            gbm.clone(),
+            render_node.into(),
+        );
+        
+        // create DrmOutputManager
+        let drm = DrmOutputManager::new(
+            drm_device,
+            allocator.clone(),
+            fb_exporter,
+            Some(gbm.clone()),
+            // supported color formats
+            [
+                Fourcc::Abgr8888,
+                Fourcc::Argb8888,
+                Fourcc::Xbgr8888,
+                Fourcc::Xrgb8888,
+            ],
+            render_formats,
+        );
         
         // register DRM event handler
         let token = event_loop
@@ -280,7 +342,7 @@ impl Device {
             drm,
             drm_node,
             gbm,
-            allocator: None,  // will be created when device is used
+            allocator: Some(allocator),
             renderer: None,   // will be created when device is used
             egl: None,        // will be created when device is used
             render_node,
@@ -325,6 +387,10 @@ fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle) -> Resul
             model: edid_info
                 .as_ref()
                 .and_then(|info| info.model())
+                .unwrap_or_else(|| String::from("Unknown")),
+            serial_number: edid_info
+                .as_ref()
+                .and_then(|info| info.serial())
                 .unwrap_or_else(|| String::from("Unknown")),
         },
     );

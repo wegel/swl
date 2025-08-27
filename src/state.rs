@@ -107,7 +107,7 @@ impl State {
         }
         
         // create the device
-        match Device::new(&mut kms.session, path, dev, &self.loop_handle) {
+        match Device::new(&mut kms.session, path, dev, &self.loop_handle, &mut kms.gpu_manager) {
             Ok(mut device) => {
                 tracing::info!("Successfully initialized DRM device: {:?}", drm_node);
                 
@@ -118,7 +118,7 @@ impl State {
                 }
                 
                 // update EGL and add to GPU manager if needed
-                if let Err(err) = device.update_egl(kms.primary_gpu.as_ref(), kms.gpu_manager.as_mut()) {
+                if let Err(err) = device.update_egl(kms.primary_gpu.as_ref(), &mut kms.gpu_manager) {
                     tracing::warn!("Failed to initialize EGL for device {:?}: {}", drm_node, err);
                 }
                 
