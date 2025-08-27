@@ -2,7 +2,10 @@
 
 use smithay::{
     backend::{
-        allocator::gbm::GbmAllocator,
+        allocator::{
+            gbm::GbmAllocator,
+            format::FormatSet,
+        },
         drm::{
             exporter::gbm::GbmFramebufferExporter,
             output::DrmOutput,
@@ -25,15 +28,17 @@ pub type GbmDrmOutput = DrmOutput<
     DrmDeviceFd,
 >;
 
-/// Placeholder surface structure - cosmic-comp has complex threading
-/// We'll expand this in Phase 2f3
-#[derive(Debug)]
-#[allow(dead_code)] // fields will be used in Phase 2f3+
+/// Simplified surface structure - cosmic-comp has complex threading
+/// We're keeping it simple without threads for now
+#[allow(dead_code)] // fields will be used in Phase 2g+
 pub struct Surface {
     pub connector: connector::Handle,
     pub crtc: crtc::Handle,
     pub output: Output,
-    // cosmic-comp has render threads, dmabuf feedback, etc - we'll add later
+    pub compositor: Option<GbmDrmOutput>,
+    pub needs_redraw: bool, // simplified damage tracking for now
+    pub primary_plane_formats: FormatSet,
+    // cosmic-comp has render threads, dmabuf feedback, damage tracking, etc - we'll add later
 }
 
 impl Surface {
@@ -48,7 +53,26 @@ impl Surface {
             connector,
             crtc,
             output,
+            compositor: None, // will be created when we resume the surface
+            needs_redraw: false,
+            primary_plane_formats: FormatSet::default(),
         }
+    }
+    
+    /// Schedule a render for this surface
+    pub fn schedule_render(&mut self) {
+        debug!("Render scheduled for output {}", self.output.name());
+        self.needs_redraw = true;
+    }
+    
+    /// Check if surface needs rendering
+    pub fn needs_render(&self) -> bool {
+        self.needs_redraw
+    }
+    
+    /// Clear the redraw flag after rendering
+    pub fn clear_redraw(&mut self) {
+        self.needs_redraw = false;
     }
 }
 

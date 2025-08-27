@@ -12,7 +12,7 @@ use smithay::{
     output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{LoopHandle, RegistrationToken},
-        drm::control::{connector, crtc, ModeTypeFlags},
+        drm::control::{connector, crtc, Mode, ModeTypeFlags},
         gbm::BufferObjectFlags as GbmBufferFlags,
         rustix::fs::OFlags,
     },
@@ -83,6 +83,26 @@ pub fn init_egl(gbm: &GbmDevice<DrmDeviceFd>) -> Result<EGLInternals> {
 }
 
 impl Device {
+    /// Create a DRM compositor for a surface
+    /// This will be called when we're ready to start rendering (Phase 2g)
+    #[allow(dead_code)] // will be used in Phase 2g
+    pub fn create_compositor_for_surface(
+        &mut self,
+        _crtc: crtc::Handle,
+        _mode: Mode,
+    ) -> Result<super::surface::GbmDrmOutput> {
+        // Phase 2g: Will implement actual DRM surface and output creation
+        // For now, this is a placeholder that compiles
+        // 
+        // The actual implementation will:
+        // 1. Create DrmSurface using self.drm.create_surface()
+        // 2. Create DrmCompositor with allocator and framebuffer exporter
+        // 3. Return as GbmDrmOutput
+        //
+        // See smithay/src/backend/drm/output.rs:337 for reference
+        
+        anyhow::bail!("DRM compositor creation not implemented yet (Phase 2g)")
+    }
     /// Scan for connected outputs and create them
     pub fn scan_outputs(&mut self) -> Result<()> {
         use smithay::reexports::drm::control::Device as ControlDevice;
