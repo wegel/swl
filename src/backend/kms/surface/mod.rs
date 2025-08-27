@@ -8,12 +8,15 @@ use smithay::{
             format::FormatSet,
         },
         drm::{
+            compositor::FrameFlags,
             exporter::gbm::GbmFramebufferExporter,
             output::DrmOutput,
             DrmDeviceFd, DrmNode,
         },
         egl::EGLContext,
         renderer::{
+            damage::OutputDamageTracker,
+            element::solid::SolidColorRenderElement,
             glow::GlowRenderer,
             multigpu::GpuManager,
         },
@@ -26,7 +29,7 @@ use smithay::{
         },
         drm::control::{connector, crtc},
     },
-    utils::{Clock, Monotonic},
+    utils::{Clock, Monotonic, Rectangle, Physical},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 use std::{
@@ -36,7 +39,7 @@ use std::{
         Arc, RwLock,
     },
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 /// Type alias for our DRM output - following cosmic-comp's definition
 /// Simplified version without presentation feedback for now
@@ -105,6 +108,10 @@ struct SurfaceThreadState {
     target_node: DrmNode,
     active: Arc<AtomicBool>,
     compositor: Option<GbmDrmOutput>,
+    
+    // damage tracking
+    damage_tracker: Option<OutputDamageTracker>,
+    last_frame_damage: Option<Vec<Rectangle<i32, Physical>>>,
     
     // scheduling
     state: QueueState,
@@ -375,6 +382,8 @@ fn surface_thread(
         target_node,
         active,
         compositor: None,
+        damage_tracker: None,
+        last_frame_damage: None,
         state: QueueState::Idle,
         thread_sender,
         output,
@@ -422,6 +431,18 @@ fn surface_thread(
 impl SurfaceThreadState {
     fn resume(&mut self, compositor: GbmDrmOutput) {
         debug!("Resuming surface {}", self.output.name());
+        
+        // initialize damage tracker for the output if not already done
+        if self.damage_tracker.is_none() {
+            if let Some(mode) = self.output.current_mode() {
+                // create damage tracker from output configuration
+                self.damage_tracker = Some(OutputDamageTracker::from_output(&self.output));
+                debug!("Initialized damage tracker for {} with mode {:?}", self.output.name(), mode);
+            } else {
+                error!("Cannot initialize damage tracker: output {} has no mode", self.output.name());
+            }
+        }
+        
         self.compositor = Some(compositor);
         self.queue_redraw();
     }
@@ -438,31 +459,6 @@ impl SurfaceThreadState {
             .unwrap_or(self.target_node)
     }
     
-    /// Get renderer for the selected node
-    fn get_renderer(&mut self) -> Option<smithay::backend::renderer::multigpu::MultiRenderer<'_, '_, crate::backend::render::GbmGlowBackend<DrmDeviceFd>, crate::backend::render::GbmGlowBackend<DrmDeviceFd>>> {
-        let render_node = self.render_node_for_output();
-        
-        // get compositor format if available
-        let format = self.compositor.as_ref().map(|c| c.format());
-        
-        if render_node != self.target_node && format.is_some() {
-            // multi-gpu case: need to render on one GPU and display on another
-            self.api.renderer(&render_node, &self.target_node, format.unwrap())
-                .map_err(|e| {
-                    error!("Failed to get multi-gpu renderer: {}", e);
-                    e
-                })
-                .ok()
-        } else {
-            // single-gpu case: render and display on same GPU
-            self.api.single_renderer(&self.target_node)
-                .map_err(|e| {
-                    error!("Failed to get single-gpu renderer: {}", e);
-                    e
-                })
-                .ok()
-        }
-    }
     
     fn queue_redraw(&mut self) {
         // simplified version - just mark as needing redraw
@@ -500,6 +496,69 @@ impl SurfaceThreadState {
                 self.state = QueueState::Idle;
             }
         }
+    }
+    
+    /// Perform a redraw with damage tracking
+    fn redraw(&mut self) -> Result<()> {
+        // check we have a compositor first
+        if self.compositor.is_none() {
+            return Ok(());
+        }
+        
+        // for now, just render a clear color
+        // Phase 2m will add actual element rendering
+        // use an empty vector - the clear color will fill the screen
+        let elements: Vec<SolidColorRenderElement> = Vec::new();
+        
+        // determine render node
+        let render_node = self.render_node_for_output();
+        
+        // get format from compositor for multi-gpu rendering
+        let format = self.compositor.as_ref().map(|c| c.format());
+        
+        // get appropriate renderer
+        let mut renderer = if render_node != self.target_node && format.is_some() {
+            // multi-gpu case
+            self.api.renderer(&render_node, &self.target_node, format.unwrap())
+                .map_err(|e| anyhow::anyhow!("Failed to get multi-gpu renderer: {}", e))?
+        } else {
+            // single-gpu case
+            self.api.single_renderer(&self.target_node)
+                .map_err(|e| anyhow::anyhow!("Failed to get single-gpu renderer: {}", e))?
+        };
+        
+        // now use the compositor
+        let compositor = self.compositor.as_mut().unwrap();
+        
+        // use compositor's render_frame method which handles damage tracking internally
+        // this is the proper way to render with DrmOutput
+        let frame_result = compositor.render_frame(
+            &mut renderer,
+            &elements,
+            crate::backend::render::CLEAR_COLOR,
+            FrameFlags::empty(),  // no special flags for now
+        ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
+        
+        // queue the frame for presentation if there's content
+        if !frame_result.is_empty {
+            // for now, no presentation feedback (Phase 2k will add proper timing)
+            compositor.queue_frame(())  // unit type for no user data
+                .map_err(|e| anyhow::anyhow!("Failed to queue frame: {:?}", e))?;
+            
+            // update state to wait for vblank
+            self.state = QueueState::WaitingForVBlank {
+                redraw_needed: false,
+            };
+            
+            trace!("Frame queued for output {}, empty: {}", 
+                self.output.name(), 
+                frame_result.is_empty
+            );
+        } else {
+            trace!("Empty frame for output {}, skipping", self.output.name());
+        }
+        
+        Ok(())
     }
     
     fn node_added(
