@@ -1,0 +1,23 @@
+[package]
+name = "swl"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["swl contributors"]
+license = "GPL-3.0-only"
+description = "A minimal tiling Wayland compositor inspired by dwl/dwm"
+
+[dependencies]
+# Core smithay dependency - we'll add more features as needed
+smithay = { version = "0.7.0", default-features = false, features = ["wayland_frontend"] }
+
+# Basic dependencies we'll need soon
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "fat"
