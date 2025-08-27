@@ -64,6 +64,7 @@ pub type GbmDrmOutput = DrmOutput<
 
 /// Commands sent to the surface render thread
 #[derive(Debug)]
+#[allow(dead_code)] // variants will be used when we connect the render loop
 pub enum ThreadCommand {
     /// Resume rendering with the given compositor
     Resume {
@@ -151,6 +152,7 @@ impl PostprocessState {
 
 /// Queue state for frame scheduling
 #[derive(Debug)]
+#[allow(dead_code)] // Queued variant will be used for frame timing
 pub enum QueueState {
     /// No render queued
     Idle,
@@ -169,6 +171,7 @@ impl Default for QueueState {
 }
 
 /// State for the surface render thread
+#[allow(dead_code)] // fields will be used in later phases
 struct SurfaceThreadState {
     // rendering
     api: GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>,
@@ -195,12 +198,14 @@ struct SurfaceThreadState {
 
 /// Dmabuf feedback for a surface
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // will be used for dmabuf optimization
 pub struct SurfaceDmabufFeedback {
     pub render_feedback: DmabufFeedback,
     pub scanout_feedback: DmabufFeedback,
 }
 
 /// Surface with render thread
+#[allow(dead_code)] // fields will be used as we implement more features
 pub struct Surface {
     pub connector: connector::Handle,
     pub crtc: crtc::Handle,
@@ -274,12 +279,14 @@ impl Surface {
     }
     
     /// Schedule a render for this surface
+    #[allow(dead_code)] // will be used when we connect the render loop
     pub fn schedule_render(&self) {
         debug!("Render scheduled for output {}", self.output.name());
         let _ = self.thread_command.send(ThreadCommand::ScheduleRender);
     }
     
     /// Resume the surface with a compositor
+    #[allow(dead_code)] // will be used when we connect the render loop
     pub fn resume(&self, compositor: GbmDrmOutput) {
         info!("Resuming surface for output {}", self.output.name());
         self.active.store(true, Ordering::SeqCst);
@@ -287,11 +294,13 @@ impl Surface {
     }
     
     /// Handle VBlank event
+    #[allow(dead_code)] // will be used for vblank handling
     pub fn on_vblank(&self) {
         let _ = self.thread_command.send(ThreadCommand::VBlank);
     }
     
     /// Check if the surface is active
+    #[allow(dead_code)] // will be used for state queries
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
     }
@@ -309,6 +318,7 @@ impl Surface {
     }
     
     /// Update dmabuf feedback based on current formats
+    #[allow(dead_code)] // will be used for dmabuf optimization
     pub fn update_dmabuf_feedback(&mut self, render_node: DrmNode, render_formats: FormatSet) {
         // simplified dmabuf feedback - just basic render and scanout tranches
         // cosmic-comp has more sophisticated logic for multi-gpu scenarios
@@ -529,6 +539,7 @@ impl SurfaceThreadState {
     
     /// Select the appropriate render node for the output
     /// simplified version - just uses primary or target node
+    #[allow(dead_code)] // used in redraw method
     fn render_node_for_output(&self) -> DrmNode {
         // if we have a primary node set, use it; otherwise use target
         self.primary_node
@@ -579,6 +590,7 @@ impl SurfaceThreadState {
     }
     
     /// Perform a redraw with damage tracking using PostprocessState
+    #[allow(dead_code)] // will be called from render loop
     fn redraw(&mut self) -> Result<()> {
         // check we have a compositor first
         if self.compositor.is_none() {

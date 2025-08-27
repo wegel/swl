@@ -46,6 +46,7 @@ pub struct EGLInternals {
 }
 
 /// Type alias for our locked DRM output manager
+#[allow(dead_code)] // will be used for output management
 pub type LockedGbmDrmOutputManager<'a> = LockedDrmOutputManager<
     'a,
     GbmAllocator<DrmDeviceFd>,
