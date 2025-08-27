@@ -25,7 +25,10 @@ use smithay::{
         wayland_server::DisplayHandle,
     },
 };
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 use tracing::{debug, error, info, warn};
 
 pub use self::device::Device;
@@ -37,6 +40,7 @@ pub struct KmsState {
     pub drm_devices: IndexMap<DrmNode, Device>,
     pub input_devices: HashMap<String, input::Device>,
     pub primary_gpu: Option<DrmNode>,
+    pub primary_node: Arc<RwLock<Option<DrmNode>>>,
     pub gpu_manager: GpuManager<GbmGlowBackend<DrmDeviceFd>>,
 }
 
@@ -79,6 +83,7 @@ pub fn init_backend(
     
     // initialize GPU manager
     let gpu_manager = GpuManager::new(GbmGlowBackend::new())?;
+    let primary_node = Arc::new(RwLock::new(None));
     
     // finish backend initialization
     state.backend = BackendData::Kms(KmsState {
@@ -87,6 +92,7 @@ pub fn init_backend(
         drm_devices: IndexMap::new(),
         input_devices: HashMap::new(),
         primary_gpu: None,
+        primary_node,
         gpu_manager,
     });
     

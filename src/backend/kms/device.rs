@@ -33,6 +33,7 @@ use std::{
     collections::HashMap,
     fmt,
     path::Path,
+    sync::{Arc, RwLock},
 };
 use tracing::{debug, error, info, warn};
 
@@ -72,6 +73,7 @@ pub struct Device {
     pub render_node: DrmNode,
     pub supports_atomic: bool,
     pub event_token: Option<RegistrationToken>,
+    pub primary_node: Arc<RwLock<Option<DrmNode>>>,
     
     // track outputs and surfaces
     pub outputs: HashMap<connector::Handle, Output>,
@@ -131,7 +133,7 @@ impl Device {
         anyhow::bail!("DRM compositor creation not implemented yet (Phase 2g)")
     }
     /// Scan for connected outputs and create them
-    pub fn scan_outputs(&mut self) -> Result<()> {
+    pub fn scan_outputs(&mut self, event_loop: &LoopHandle<'static, crate::state::State>) -> Result<()> {
         use smithay::reexports::drm::control::Device as ControlDevice;
         
         // get display configuration (connector -> CRTC mapping)  
@@ -170,7 +172,17 @@ impl Device {
                         );
                         
                         // create surface for the output
-                        self.surface_manager.create_surface(output.clone(), crtc, conn);
+                        if let Err(err) = self.surface_manager.create_surface(
+                            output.clone(), 
+                            crtc, 
+                            conn, 
+                            self.primary_node.clone(),
+                            self.render_node,
+                            event_loop,
+                        ) {
+                            warn!(?err, "Failed to create surface for output");
+                            continue;
+                        }
                         
                         // store output and crtc mapping
                         self.outputs.insert(conn, output);
@@ -241,6 +253,7 @@ impl Device {
         dev: libc::dev_t,
         event_loop: &LoopHandle<'static, crate::state::State>,
         gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>,
+        primary_node: Arc<RwLock<Option<DrmNode>>>,
     ) -> Result<Self> {
         info!("Initializing DRM device: {}", path.display());
         
@@ -348,6 +361,7 @@ impl Device {
             render_node,
             supports_atomic,
             event_token: Some(token),
+            primary_node,
             outputs: HashMap::new(),
             surfaces: HashMap::new(),
             surface_manager: super::surface::SurfaceManager::new(),

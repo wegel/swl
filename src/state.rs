@@ -107,13 +107,14 @@ impl State {
         }
         
         // create the device
-        match Device::new(&mut kms.session, path, dev, &self.loop_handle, &mut kms.gpu_manager) {
+        match Device::new(&mut kms.session, path, dev, &self.loop_handle, &mut kms.gpu_manager, kms.primary_node.clone()) {
             Ok(mut device) => {
                 tracing::info!("Successfully initialized DRM device: {:?}", drm_node);
                 
                 // set primary GPU if not set
                 if kms.primary_gpu.is_none() {
                     kms.primary_gpu = Some(drm_node.clone());
+                    *kms.primary_node.write().unwrap() = Some(drm_node.clone());
                     tracing::info!("Setting primary GPU: {:?}", drm_node);
                 }
                 
@@ -123,7 +124,7 @@ impl State {
                 }
                 
                 // scan for connected outputs
-                if let Err(err) = device.scan_outputs() {
+                if let Err(err) = device.scan_outputs(&self.loop_handle) {
                     tracing::warn!("Failed to scan outputs for device {:?}: {}", drm_node, err);
                 }
                 
