@@ -10,6 +10,7 @@ use smithay::{
 };
 use tracing::{error, info};
 
+mod backend;
 mod state;
 use state::State;
 
@@ -39,6 +40,9 @@ fn main_inner() -> Result<()> {
         event_loop.handle(),
         event_loop.get_signal(),
     );
+    
+    // init backend
+    backend::init_backend(&display.handle(), &mut event_loop, &mut state)?;
 
     info!("Starting event loop");
     
