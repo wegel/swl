@@ -552,17 +552,17 @@ impl SurfaceThreadState {
     
     
     fn queue_redraw(&mut self) {
-        // simplified version - just mark as needing redraw
-        // we'll implement actual timing in Phase 2k
+        // Phase 2jd: Hook up redraw() to be called
+        // Phase 2k will add proper timing, for now just call directly
         if self.compositor.is_some() {
             match self.state {
                 QueueState::Idle => {
                     debug!("Queueing redraw for {}", self.output.name());
-                    // in Phase 2k, we'll schedule a timer here
-                    // for now, just transition to waiting state
-                    self.state = QueueState::WaitingForVBlank {
-                        redraw_needed: false,
-                    };
+                    // call redraw immediately for now
+                    // Phase 2k will add proper timer scheduling
+                    if let Err(err) = self.redraw() {
+                        error!("Failed to redraw: {}", err);
+                    }
                 }
                 QueueState::WaitingForVBlank { .. } => {
                     self.state = QueueState::WaitingForVBlank {
@@ -575,9 +575,12 @@ impl SurfaceThreadState {
     }
     
     fn on_vblank(&mut self) {
+        // Phase 2jd: VBlank handler calls queue_redraw if needed
         match &self.state {
             QueueState::WaitingForVBlank { redraw_needed } => {
                 if *redraw_needed {
+                    // another redraw was requested while waiting
+                    self.state = QueueState::Idle;
                     self.queue_redraw();
                 } else {
                     self.state = QueueState::Idle;
@@ -590,7 +593,6 @@ impl SurfaceThreadState {
     }
     
     /// Perform a redraw with damage tracking using PostprocessState
-    #[allow(dead_code)] // will be called from render loop
     fn redraw(&mut self) -> Result<()> {
         // check we have a compositor first
         if self.compositor.is_none() {
