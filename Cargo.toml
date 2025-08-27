@@ -9,11 +9,15 @@ description = "A minimal tiling Wayland compositor inspired by dwl/dwm"
 
 [dependencies]
 # Core smithay dependency - we'll add more features as needed
-smithay = { version = "0.7.0", default-features = false, features = ["wayland_frontend"] }
+smithay = { version = "0.7.0", default-features = false, features = ["wayland_frontend", "desktop"] }
 
-# Basic dependencies we'll need soon
-anyhow = "1.0"
-tracing = "0.1"
+# Event loop
+calloop = { version = "0.14.2", features = ["executor"] }
+
+# Error handling and logging
+anyhow = { version = "1.0", features = ["backtrace"] }
+thiserror = "2.0"
+tracing = { version = "0.1", features = ["max_level_debug", "release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.dev]
