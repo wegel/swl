@@ -106,6 +106,11 @@ pub enum SurfaceCommand {
 struct PostprocessState {
     texture: TextureRenderBuffer<GlesTexture>,
     damage_tracker: OutputDamageTracker,
+    // Phase 5d: Multi-buffer support for proper damage tracking
+    // TODO: Replace single texture with array of 2-3 textures
+    // buffer_index: usize,
+    // textures: Vec<TextureRenderBuffer<GlesTexture>>,
+    // buffer_ages: Vec<usize>,
 }
 
 impl PostprocessState {
@@ -155,6 +160,20 @@ impl PostprocessState {
             damage_tracker,
         })
     }
+}
+
+/// Plane assignment for hardware composition
+#[derive(Debug)]
+pub struct PlaneAssignment {
+    pub element_index: usize,
+    pub plane_type: PlaneType,
+}
+
+#[derive(Debug)]
+pub enum PlaneType {
+    Primary,
+    Overlay,
+    Cursor,
 }
 
 /// Queue state for frame scheduling
@@ -213,6 +232,12 @@ struct SurfaceThreadState {
     // event loop
     loop_handle: LoopHandle<'static, Self>,
     clock: Clock<Monotonic>,
+    
+    // frame callback sequence number to prevent empty-damage commit busy loops
+    frame_callback_seq: usize,
+    
+    // Phase 5f: Adaptive sync support
+    vrr_enabled: bool,
 }
 
 /// Dmabuf feedback for a surface
@@ -510,6 +535,8 @@ fn surface_thread(
         timings,
         output,
         shell,
+        frame_callback_seq: 0,
+        vrr_enabled: false,  // Phase 5f: VRR disabled by default
         loop_handle: event_loop.handle(),
         clock,
     };
@@ -604,6 +631,49 @@ impl SurfaceThreadState {
         self.target_node
     }
     
+    /// Phase 5a: Check if we can use direct rendering (bypass offscreen)
+    fn can_use_direct_render(&self) -> bool {
+        // Phase 5a: Enable direct rendering when conditions are met
+        // Direct rendering is possible when:
+        // 1. No screen filters active (we don't have any yet)
+        // 2. No output mirroring (we don't support mirroring yet)  
+        // 3. No transform/scaling mismatch (not implemented)
+        // 4. Simple rendering scenario
+        
+        // enable direct rendering for Phase 5a
+        // this will give us proper buffer age from the DRM swapchain
+        true
+    }
+    
+    /// Phase 5c: Check if elements can use hardware planes
+    fn assign_planes(&self, _elements: &[CosmicElement<GlMultiRenderer>]) -> Vec<PlaneAssignment> {
+        // Phase 5c: Hardware plane support
+        // TODO: Query available planes and assign elements to them
+        // For now, everything goes to primary plane (rendered)
+        vec![]
+    }
+    
+    /// Phase 5e: Check if we can do direct scanout (fullscreen bypass)
+    fn can_direct_scanout(&self, _elements: &[CosmicElement<GlMultiRenderer>]) -> bool {
+        // Phase 5e: Direct scanout for fullscreen content
+        // TODO: Check if single fullscreen element with compatible buffer
+        false
+    }
+    
+    /// Phase 5f: Check and enable VRR if supported
+    fn update_vrr(&mut self, enable: bool) {
+        if let Some(compositor) = self.compositor.as_mut() {
+            // try to enable/disable VRR
+            if let Err(e) = compositor.with_compositor(|c| c.use_vrr(enable)) {
+                debug!("VRR update failed: {:?}", e);
+            } else {
+                self.vrr_enabled = enable;
+                debug!("VRR {} for output {}", 
+                    if enable { "enabled" } else { "disabled" },
+                    self.output.name());
+            }
+        }
+    }
     
     fn queue_redraw(&mut self) {
         self.queue_redraw_force(false);
@@ -629,13 +699,18 @@ impl SurfaceThreadState {
         
         if !force {
             match &self.state {
-                QueueState::Idle | QueueState::WaitingForEstimatedVBlank(_) => {}
+                QueueState::Idle | QueueState::WaitingForEstimatedVBlank(_) => {
+                    debug!("{}: State allows scheduling (Idle or WaitingForEstimatedVBlank)", self.output.name());
+                }
                 
                 // a redraw is already queued.
                 QueueState::Queued(_) | QueueState::WaitingForEstimatedVBlankAndQueued { .. } => {
+                    debug!("{}: Skipping - redraw already queued", self.output.name());
                     return;
                 }
-                _ => {},
+                _ => {
+                    debug!("{}: Unknown state, continuing", self.output.name());
+                },
             };
         }
         
@@ -736,10 +811,44 @@ impl SurfaceThreadState {
         
         self.frame_count = self.frame_count.saturating_add(1);
         
-        // only queue redraw if explicitly needed or animations are ongoing
-        // for now we don't have animations, so only redraw if explicitly requested
-        if redraw_needed || self.shell.read().unwrap().animations_going() {
+        // check if we need to continue rendering
+        // only redraw if explicitly needed or if there are ongoing animations
+        let needs_render = {
+            let shell = self.shell.read().unwrap();
+            redraw_needed || shell.animations_going()
+        };
+        
+        if needs_render {
             self.queue_redraw();
+        }
+        
+        // note: frame callbacks are already sent in redraw() when we successfully queue_frame
+        // or in on_estimated_vblank() when we don't render
+    }
+    
+    /// Send frame callbacks to all windows on this output
+    /// This allows clients to continue their animations (like cursor blinking)
+    fn send_frame_callbacks(&mut self) {
+        use smithay::desktop::utils::send_frames_surface_tree;
+        
+        let clock = self.clock.now();
+        let output = &self.output;
+        
+        // increment sequence to prevent empty-damage commit busy loops
+        self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
+        
+        // send frame callbacks to all windows on this output
+        let shell = self.shell.read().unwrap();
+        for window in shell.space.elements() {
+            if let Some(toplevel) = window.toplevel() {
+                send_frames_surface_tree(
+                    toplevel.wl_surface(),
+                    output,
+                    clock,
+                    None,
+                    |_, _| Some(output.clone()),  // always send for now
+                );
+            }
         }
     }
     
@@ -753,8 +862,11 @@ impl SurfaceThreadState {
             return Ok(());
         }
         
-        // check we have postprocess state
-        if self.postprocess.is_none() {
+        // check we have postprocess state (only if not using direct render)
+        // Phase 5a: Direct Rendering Path - decide between direct and offscreen rendering
+        let use_direct_render = self.can_use_direct_render();
+        
+        if !use_direct_render && self.postprocess.is_none() {
             error!("No postprocess state for output {}", self.output.name());
             return Ok(());
         }
@@ -784,7 +896,67 @@ impl SurfaceThreadState {
         // mark element gathering done
         self.timings.elements_done(&self.clock);
         
-        // renderer already obtained above when collecting elements
+        // Phase 5a: Choose between direct and offscreen rendering
+        if use_direct_render {
+            // Phase 5a: Direct rendering path - render directly to DRM framebuffer
+            debug!("[DIRECT] Starting render for {}", self.output.name());
+            
+            // render directly to the DRM compositor's framebuffer
+            // this gives us proper buffer age from the swapchain
+            let frame_result = self.compositor.as_mut().unwrap().render_frame(
+                &mut renderer,
+                &elements,
+                crate::backend::render::CLEAR_COLOR,  // grey background
+                FrameFlags::empty(),
+            ).map_err(|e| anyhow::anyhow!("Failed to render frame: {:?}", e))?;
+            
+            debug!("[DIRECT] Render result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
+            
+            // mark submission time
+            self.timings.submitted_for_presentation(&self.clock);
+            
+            // always try to queue the frame, even if empty
+            // the compositor will return EmptyFrame error if there's no damage
+            match self.compositor.as_mut().unwrap().queue_frame(()) {
+                Ok(()) => {
+                    // successfully queued, we'll get a real VBlank
+                    self.state = QueueState::WaitingForVBlank {
+                        redraw_needed: false,
+                    };
+                    
+                    // for direct rendering, we don't have damage tracking yet
+                    // Phase 5b will add proper damage tracking with swapchain
+                    self.last_frame_damage = None;
+                    
+                    // send frame callbacks now since we queued a frame
+                    self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
+                    self.send_frame_callbacks();
+                    
+                    trace!("Direct frame queued for output {}", self.output.name());
+                }
+                Err(smithay::backend::drm::compositor::FrameError::EmptyFrame) => {
+                    // empty frame - use estimated VBlank to maintain frame callbacks
+                    debug!("[DIRECT] Empty frame for output {}, using estimated VBlank", self.output.name());
+                    
+                    // calculate estimated presentation time
+                    let estimated_presentation = self.timings.next_presentation_time(&self.clock);
+                    
+                    // queue estimated vblank timer to maintain frame timing
+                    self.queue_estimated_vblank(
+                        estimated_presentation,
+                        false, // don't force redraw unless we have animations
+                    );
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Failed to queue frame: {:?}", e));
+                }
+            }
+            
+            return Ok(());
+        }
+        
+        // offscreen rendering path - render to texture first for post-processing
+        debug!("[OFFSCREEN] Starting render for {}", self.output.name());
         
         // Phase 2jb: Render to offscreen texture using PostprocessState
         // This follows cosmic-comp's approach exactly
@@ -792,7 +964,7 @@ impl SurfaceThreadState {
         let postprocess = self.postprocess.as_mut().unwrap();
         let transform = self.output.current_transform();
         
-        let damage = postprocess.texture.render()
+        let _damage = postprocess.texture.render()
             .draw(|texture| {
                 // bind the texture as our render target
                 let mut fb = renderer.bind(texture)
@@ -844,11 +1016,11 @@ impl SurfaceThreadState {
                 Ok(damage)
             })
             .context("Failed to draw to offscreen render target")?;
-        
-        // NOTE: We can't skip on empty damage yet because we use age 1
-        // which forces full redraw. This will be fixed when we implement
-        // proper buffer age tracking in Phase 2je
-        
+            
+            // NOTE: We can't skip on empty damage yet because we use age 1
+            // which forces full redraw. This will be fixed when we implement
+            // proper buffer age tracking in Phase 2je
+            
         // Phase 2jc: Composite the offscreen texture to the display
         // Create a texture element from our offscreen buffer
         // This is a simplified version of cosmic-comp's postprocess_elements()
@@ -862,41 +1034,57 @@ impl SurfaceThreadState {
         );
         
         // wrap in CosmicElement for proper rendering
-        let elements: Vec<CosmicElement<GlMultiRenderer>> = vec![
+        let postprocess_elements: Vec<CosmicElement<GlMultiRenderer>> = vec![
             CosmicElement::Texture(texture_element)
         ];
         
         // use the multi-gpu renderer to present the composited texture
         let frame_result = self.compositor.as_mut().unwrap().render_frame(
             &mut renderer,
-            &elements,
+            &postprocess_elements,
             [0.0, 0.0, 0.0, 0.0],  // black background (already rendered in texture)
             FrameFlags::empty(),
         ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
         
-        // queue the frame for presentation if there's content
-        debug!("Frame result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
-        if !frame_result.is_empty {
-            // Phase 2je: damage is already stored in the render closure above
-            
-            // mark submission time
-            self.timings.submitted_for_presentation(&self.clock);
-            
-            // queue for presentation with userdata for tracking
-            self.compositor.as_mut().unwrap().queue_frame(())
-                .map_err(|e| anyhow::anyhow!("Failed to queue frame: {:?}", e))?;
-            
-            // update state to wait for vblank
-            self.state = QueueState::WaitingForVBlank {
-                redraw_needed: false,
-            };
-            
-            trace!("Frame queued for output {}, damage regions: {}", 
-                self.output.name(), 
-                self.last_frame_damage.as_ref().map(|d| d.len()).unwrap_or(0)
-            );
-        } else {
-            trace!("Empty frame for output {}, skipping", self.output.name());
+        debug!("[OFFSCREEN] Render result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
+        
+        // mark submission time
+        self.timings.submitted_for_presentation(&self.clock);
+        
+        // always try to queue the frame, even if empty
+        // the compositor will return EmptyFrame error if there's no damage
+        match self.compositor.as_mut().unwrap().queue_frame(()) {
+            Ok(()) => {
+                // successfully queued, we'll get a real VBlank
+                self.state = QueueState::WaitingForVBlank {
+                    redraw_needed: false,
+                };
+                
+                // send frame callbacks now since we queued a frame
+                self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
+                self.send_frame_callbacks();
+                
+                trace!("Frame queued for output {}, damage regions: {}", 
+                    self.output.name(), 
+                    self.last_frame_damage.as_ref().map(|d| d.len()).unwrap_or(0)
+                );
+            }
+            Err(smithay::backend::drm::compositor::FrameError::EmptyFrame) => {
+                // empty frame - use estimated VBlank to maintain frame callbacks
+                debug!("[OFFSCREEN] Empty frame for output {}, using estimated VBlank", self.output.name());
+                
+                // calculate estimated presentation time
+                let estimated_presentation = self.timings.next_presentation_time(&self.clock);
+                
+                // queue estimated vblank timer to maintain frame timing
+                self.queue_estimated_vblank(
+                    estimated_presentation,
+                    false, // don't force redraw unless we have animations
+                );
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to queue frame: {:?}", e));
+            }
         }
         
         Ok(())
@@ -920,5 +1108,87 @@ impl SurfaceThreadState {
     
     fn node_removed(&mut self, node: DrmNode) {
         self.api.as_mut().remove_node(&node);
+    }
+    
+    /// Queue an estimated VBlank timer when we didn't submit to KMS
+    /// This maintains frame callback timing without actual rendering
+    fn queue_estimated_vblank(&mut self, target_presentation_time: Duration, force: bool) {
+        match std::mem::take(&mut self.state) {
+            QueueState::Idle => unreachable!("queue_estimated_vblank called in Idle state"),
+            QueueState::Queued(_) => (), // render was queued while we were working
+            QueueState::WaitingForVBlank { .. } => unreachable!("queue_estimated_vblank called while waiting for VBlank"),
+            QueueState::WaitingForEstimatedVBlank(token)
+            | QueueState::WaitingForEstimatedVBlankAndQueued {
+                estimated_vblank: token,
+                ..
+            } => {
+                // already have an estimated vblank timer, keep it
+                self.state = QueueState::WaitingForEstimatedVBlank(token);
+                return;
+            }
+        }
+
+        let now = self.clock.now();
+        let mut duration = target_presentation_time.saturating_sub(now.into());
+
+        // no use setting a zero timer, since we'll send frame callbacks anyway right after
+        // this can happen for example with unknown presentation time from DRM
+        if duration.is_zero() {
+            duration += self.timings.refresh_interval();
+        }
+
+        debug!("Queueing estimated vblank timer to fire in {:?} for {}", duration, self.output.name());
+
+        let timer = Timer::from_duration(duration);
+        let token = self
+            .loop_handle
+            .insert_source(timer, move |_, _, data| {
+                data.on_estimated_vblank(force);
+                TimeoutAction::Drop
+            })
+            .unwrap();
+        self.state = QueueState::WaitingForEstimatedVBlank(token);
+    }
+    
+    /// Handle estimated VBlank timer firing
+    /// Sends frame callbacks and optionally triggers redraw
+    fn on_estimated_vblank(&mut self, force: bool) {
+        let old_state = std::mem::replace(&mut self.state, QueueState::Idle);
+        match old_state {
+            QueueState::Idle => {
+                warn!("on_estimated_vblank called in Idle state");
+                return;
+            }
+            QueueState::Queued(token) => {
+                // a real render was queued while timer was pending, ignore timer
+                self.state = QueueState::Queued(token);
+                return;
+            }
+            QueueState::WaitingForVBlank { redraw_needed } => {
+                // we got a real frame queued while timer was pending, ignore timer
+                self.state = QueueState::WaitingForVBlank { redraw_needed };
+                return;
+            }
+            QueueState::WaitingForEstimatedVBlank(_) => (),
+            // the timer fired just in front of a redraw
+            QueueState::WaitingForEstimatedVBlankAndQueued { queued_render, .. } => {
+                self.state = QueueState::Queued(queued_render);
+                return;
+            }
+        }
+
+        self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
+
+        // check if we need to trigger a redraw
+        let should_redraw = {
+            let shell = self.shell.read().unwrap();
+            force || shell.animations_going()
+        };
+        
+        if should_redraw {
+            self.queue_redraw();
+        }
+        
+        self.send_frame_callbacks();
     }
 }

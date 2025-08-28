@@ -56,14 +56,25 @@ impl Shell {
         self.windows.insert(id, window.clone());
         
         // map the window to the space
-        let output_size = output.current_mode().unwrap().size;
-        let window_size = window.geometry().size;
-        tracing::debug!("Window geometry: {:?}, output size: {:?}", window_size, output_size);
+        let output_mode = output.current_mode().expect("Output should have a mode");
+        let output_size = output_mode.size;
+        let window_geometry = window.geometry();
+        let window_size = window_geometry.size;
+        
+        tracing::info!("Output mode: {:?}, Output size: {:?}", output_mode, output_size);
+        tracing::info!("Window geometry: {:?}, Window size: {:?}", window_geometry, window_size);
         
         // center the window on the output for now (no tiling yet)
-        let x = (output_size.w - window_size.w) / 2;
-        let y = (output_size.h - window_size.h) / 2;
-        let location = Point::from((x, y));
+        // if window has no size yet (0x0), use a default position
+        let location = if window_size.w > 0 && window_size.h > 0 {
+            let x = (output_size.w - window_size.w) / 2;
+            let y = (output_size.h - window_size.h) / 2;
+            Point::from((x, y))
+        } else {
+            // window has no size yet, position at top-left and it will be repositioned later
+            tracing::warn!("Window has 0x0 size, using default position");
+            Point::from((0, 0))
+        };
         
         tracing::info!("Mapping window {} to space at location {:?}", id, location);
         self.space.map_element(window.clone(), location, false);
@@ -144,8 +155,8 @@ impl Shell {
     
     /// Check if there are any ongoing animations
     pub fn animations_going(&self) -> bool {
-        // for now we don't have any animations (window movement, fading, etc)
-        // this will return true when we add animated window transitions
+        // we don't have compositor-side animations yet (window movement, fading, etc)
+        // client animations are handled through proper frame callbacks in the backend
         false
     }
     
@@ -164,7 +175,7 @@ impl Shell {
         // render all windows in the space
         for window in self.space.elements() {
             if let Some(location) = self.space.element_location(window) {
-                tracing::debug!("Rendering window at location {:?}", location);
+                tracing::debug!("Window location: {:?}, geometry: {:?}", location, window.geometry());
                 
                 // get surface render elements and wrap them in CosmicElement
                 let surface_elements = window.render_elements(
