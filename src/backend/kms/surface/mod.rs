@@ -619,9 +619,11 @@ impl SurfaceThreadState {
         
         if let QueueState::WaitingForVBlank { .. } = &self.state {
             // we're waiting for VBlank, request a redraw afterwards.
+            // this is the only time we should set redraw_needed to true
             self.state = QueueState::WaitingForVBlank {
                 redraw_needed: true,
             };
+            debug!("Setting redraw_needed=true for {} (waiting for VBlank)", self.output.name());
             return;
         }
         
@@ -717,27 +719,26 @@ impl SurfaceThreadState {
             self.timings.presented(clock);
         }
         
-        // handle queue state transitions based on VBlank
-        let redraw_needed = match &self.state {
-            QueueState::WaitingForVBlank { redraw_needed } => {
-                *redraw_needed
-            }
+        // extract redraw_needed from current state and transition to Idle
+        let redraw_needed = match std::mem::replace(&mut self.state, QueueState::Idle) {
+            QueueState::WaitingForVBlank { redraw_needed } => redraw_needed,
             QueueState::WaitingForEstimatedVBlank(token) => {
-                self.loop_handle.remove(*token);
+                self.loop_handle.remove(token);
                 false
             }
             QueueState::WaitingForEstimatedVBlankAndQueued { estimated_vblank, queued_render } => {
-                self.loop_handle.remove(*estimated_vblank);
-                self.state = QueueState::Queued(*queued_render);
+                self.loop_handle.remove(estimated_vblank);
+                self.state = QueueState::Queued(queued_render);
                 return;
             }
             _ => false,
         };
         
-        self.state = QueueState::Idle;
         self.frame_count = self.frame_count.saturating_add(1);
         
-        if redraw_needed {
+        // only queue redraw if explicitly needed or animations are ongoing
+        // for now we don't have animations, so only redraw if explicitly requested
+        if redraw_needed || self.shell.read().unwrap().animations_going() {
             self.queue_redraw();
         }
     }
@@ -791,7 +792,7 @@ impl SurfaceThreadState {
         let postprocess = self.postprocess.as_mut().unwrap();
         let transform = self.output.current_transform();
         
-        let _damage = postprocess.texture.render()
+        let damage = postprocess.texture.render()
             .draw(|texture| {
                 // bind the texture as our render target
                 let mut fb = renderer.bind(texture)
@@ -843,6 +844,10 @@ impl SurfaceThreadState {
                 Ok(damage)
             })
             .context("Failed to draw to offscreen render target")?;
+        
+        // NOTE: We can't skip on empty damage yet because we use age 1
+        // which forces full redraw. This will be fixed when we implement
+        // proper buffer age tracking in Phase 2je
         
         // Phase 2jc: Composite the offscreen texture to the display
         // Create a texture element from our offscreen buffer

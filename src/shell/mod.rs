@@ -142,6 +142,13 @@ impl Shell {
         None
     }
     
+    /// Check if there are any ongoing animations
+    pub fn animations_going(&self) -> bool {
+        // for now we don't have any animations (window movement, fading, etc)
+        // this will return true when we add animated window transitions
+        false
+    }
+    
     /// Get render elements for all windows on the given output
     pub fn render_elements<R>(&self, output: &Output, renderer: &mut R) -> Vec<CosmicElement<R>>
     where
