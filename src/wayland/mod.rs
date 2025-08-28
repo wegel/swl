@@ -3,12 +3,19 @@
 pub mod handlers;
 
 use smithay::{
-    delegate_compositor, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::Window,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
+        output::OutputHandler,
+        selection::{
+            data_device::{
+                ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+            },
+            SelectionHandler,
+        },
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface,
             XdgShellHandler, XdgShellState,
@@ -58,16 +65,33 @@ impl ShmHandler for State {
     }
 }
 
+impl OutputHandler for State {}
+
+impl SelectionHandler for State {
+    type SelectionUserData = ();
+}
+
+impl ClientDndGrabHandler for State {}
+impl ServerDndGrabHandler for State {}
+impl DataDeviceHandler for State {
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.data_device_state
+    }
+}
+
 impl XdgShellHandler for State {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
+        tracing::debug!("xdg_shell_state accessed");
         &mut self.xdg_shell_state
     }
     
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        tracing::info!("New toplevel surface requested");
         let window = Window::new_wayland_window(surface.clone());
         
         // send initial configure
         surface.send_configure();
+        tracing::debug!("Sent initial configure to toplevel");
         
         // add the window to our shell
         // for now, map to the first available output
@@ -102,6 +126,8 @@ impl XdgShellHandler for State {
 
 // delegate protocol handling to smithay
 delegate_compositor!(State);
+delegate_data_device!(State);
+delegate_output!(State);
 delegate_shm!(State);
 delegate_seat!(State);
 delegate_xdg_shell!(State);

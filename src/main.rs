@@ -3,11 +3,12 @@
 use anyhow::{Context, Result};
 use smithay::{
     reexports::{
-        calloop::EventLoop,
-        wayland_server::Display,
+        calloop::{self, EventLoop, Interest, Mode, PostAction},
+        wayland_server::{Display, DisplayHandle},
     },
     wayland::socket::ListeningSocketSource,
 };
+use std::os::fd::AsFd;
 use tracing::{error, info};
 
 mod backend;
@@ -34,18 +35,18 @@ fn main_inner() -> Result<()> {
         .context("Failed to initialize event loop")?;
     
     // init wayland display
-    let (display, socket) = init_wayland_display(&mut event_loop)?;
+    let (display_handle, socket) = init_wayland_display(&mut event_loop)?;
     
     // init state
     let mut state = State::new(
-        &display,
+        display_handle.clone(),
         socket,
         event_loop.handle(),
         event_loop.get_signal(),
     );
     
     // init backend
-    backend::init_backend(&display.handle(), &mut event_loop, &mut state)?;
+    backend::init_backend(&display_handle, &mut event_loop, &mut state)?;
 
     info!("Starting event loop");
     
@@ -82,10 +83,11 @@ fn init_logger() -> Result<()> {
 
 fn init_wayland_display(
     event_loop: &mut EventLoop<'static, State>,
-) -> Result<(Display<State>, String)> {
+) -> Result<(DisplayHandle, String)> {
     // create the wayland display
     let display = Display::<State>::new()
         .context("Failed to create wayland display")?;
+    let display_handle = display.handle();
     
     // create a listening socket
     let listening_socket = ListeningSocketSource::new_auto()
@@ -102,14 +104,41 @@ fn init_wayland_display(
         .handle()
         .insert_source(listening_socket, |client_stream, _, state| {
             // accept new wayland clients
-            let _ = state
+            match state
                 .display_handle
                 .insert_client(
                     client_stream, 
                     std::sync::Arc::new(crate::wayland::handlers::ClientState::new())
-                );
+                ) {
+                Ok(client) => {
+                    tracing::info!("New Wayland client connected: {:?}", client.id());
+                }
+                Err(err) => {
+                    tracing::error!("Failed to insert client: {}", err);
+                }
+            }
         })
         .context("Failed to init wayland socket source")?;
     
-    Ok((display, socket_name))
+    // insert the display as an event source
+    event_loop
+        .handle()
+        .insert_source(
+            calloop::generic::Generic::new(display, Interest::READ, Mode::Level),
+            move |_, display, state: &mut State| {
+                // dispatch pending messages from clients
+                // SAFETY: We don't drop the display
+                match unsafe { display.get_mut().dispatch_clients(state) } {
+                    Ok(_) => Ok(PostAction::Continue),
+                    Err(e) => {
+                        tracing::error!("Failed to dispatch clients: {}", e);
+                        state.should_stop = true;
+                        Ok(PostAction::Continue)
+                    }
+                }
+            }
+        )
+        .context("Failed to init display event source")?;
+    
+    Ok((display_handle, socket_name))
 }

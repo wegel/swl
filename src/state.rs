@@ -14,12 +14,14 @@ use smithay::{
     output::Output,
     wayland::{
         compositor::CompositorState,
+        output::OutputManagerState,
+        selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
         shm::ShmState,
     },
     reexports::{
         calloop::{LoopHandle, LoopSignal},
-        wayland_server::{Display, DisplayHandle},
+        wayland_server::{DisplayHandle},
     },
 };
 
@@ -43,6 +45,8 @@ pub struct State {
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
+    pub data_device_state: DataDeviceState,
+    pub output_manager_state: OutputManagerState,
     pub shell: Shell,
     pub outputs: Vec<Output>,
     session_active: bool,
@@ -58,17 +62,18 @@ impl State {
 
 impl State {
     pub fn new(
-        display: &Display<State>,
+        display_handle: DisplayHandle,
         socket_name: String,
         loop_handle: LoopHandle<'static, State>,
         loop_signal: LoopSignal,
     ) -> Self {
-        let display_handle = display.handle();
         
         // create compositor state
         let compositor_state = CompositorState::new::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new::<State>(&display_handle);
         let shm_state = ShmState::new::<State>(&display_handle, vec![]);
+        let data_device_state = DataDeviceState::new::<State>(&display_handle);
+        let output_manager_state = OutputManagerState::new_with_xdg_output::<State>(&display_handle);
         
         // create seat state and the default seat
         let mut seat_state = SeatState::new();
@@ -93,6 +98,8 @@ impl State {
             compositor_state,
             xdg_shell_state,
             shm_state,
+            data_device_state,
+            output_manager_state,
             shell,
             outputs: Vec::new(),
             session_active: false,
@@ -167,7 +174,7 @@ impl State {
                 }
                 
                 // scan for connected outputs
-                match device.scan_outputs(&self.loop_handle, &mut kms.gpu_manager) {
+                match device.scan_outputs(&self.display_handle, &self.loop_handle, &mut kms.gpu_manager) {
                     Ok(outputs) => {
                         // add outputs to our state
                         self.outputs.extend(outputs);

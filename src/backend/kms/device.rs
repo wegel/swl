@@ -25,6 +25,7 @@ use smithay::{
         drm::control::{connector, crtc, ModeTypeFlags},
         gbm::BufferObjectFlags as GbmBufferFlags,
         rustix::fs::OFlags,
+        wayland_server::DisplayHandle,
     },
     utils::{DeviceFd, Point, Transform},
 };
@@ -115,7 +116,7 @@ pub fn init_egl(gbm: &GbmDevice<DrmDeviceFd>) -> Result<EGLInternals> {
 
 impl Device {
     /// Scan for connected outputs and create them
-    pub fn scan_outputs(&mut self, event_loop: &LoopHandle<'static, crate::state::State>, gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>) -> Result<Vec<Output>> {
+    pub fn scan_outputs(&mut self, display_handle: &DisplayHandle, event_loop: &LoopHandle<'static, crate::state::State>, gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>) -> Result<Vec<Output>> {
         use smithay::reexports::drm::control::Device as ControlDevice;
         
         // get display configuration (connector -> CRTC mapping)  
@@ -137,7 +138,7 @@ impl Device {
                     continue;
                 };
                 
-                match create_output_for_conn(self.drm.device_mut(), conn) {
+                match create_output_for_conn(self.drm.device_mut(), conn, display_handle) {
                     Ok(output) => {
                         if let Err(err) = populate_modes(self.drm.device_mut(), &output, conn) {
                             warn!(?err, ?conn, "Failed to populate modes");
@@ -441,7 +442,7 @@ impl Device {
 }
 
 /// Create an output for a DRM connector
-fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle) -> Result<Output> {
+fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle, display_handle: &DisplayHandle) -> Result<Output> {
     use smithay::reexports::drm::control::Device as ControlDevice;
     
     let conn_info = drm
@@ -479,6 +480,11 @@ fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle) -> Resul
                 .unwrap_or_else(|| String::from("Unknown")),
         },
     );
+    
+    // Create the global to advertise this output to Wayland clients
+    let _global = output.create_global::<crate::state::State>(display_handle);
+    tracing::info!("Created wl_output global for {}", output.name());
+    
     Ok(output)
 }
 
