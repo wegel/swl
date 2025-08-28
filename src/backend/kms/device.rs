@@ -401,6 +401,10 @@ impl Device {
             render_node.into(),
         );
         
+        // check cursor size from DRM device
+        let cursor_size = drm_device.cursor_size();
+        info!("DRM device cursor size: {:?}", cursor_size);
+        
         // create DrmOutputManager
         let drm = DrmOutputManager::new(
             drm_device,

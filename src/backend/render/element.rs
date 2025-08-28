@@ -6,7 +6,7 @@ use smithay::{
             surface::WaylandSurfaceRenderElement,
             texture::TextureRenderElement,
             memory::MemoryRenderBufferRenderElement,
-            Element, Id, Kind, RenderElement,
+            Element, Id, Kind, RenderElement, UnderlyingStorage,
         },
         gles::{GlesError, GlesTexture},
         glow::{GlowRenderer, GlowFrame},
@@ -314,6 +314,15 @@ where
                 opaque_regions,
             ).map_err(R::Error::from_gles_error),
             CosmicElement::Cursor(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
+        }
+    }
+    
+    fn underlying_storage(&self, renderer: &mut R) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
+        match self {
+            CosmicElement::Surface(elem) => elem.underlying_storage(renderer),
+            CosmicElement::Damage(_) => None,  // DamageElement has no underlying storage
+            CosmicElement::Texture(_) => None, // TextureRenderElement doesn't provide underlying storage for external renderers
+            CosmicElement::Cursor(elem) => elem.underlying_storage(renderer),
         }
     }
 }

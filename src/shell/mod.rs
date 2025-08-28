@@ -42,7 +42,8 @@ impl Shell {
             windows: HashMap::new(),
             next_window_id: 1,
             focused_window: None,
-            cursor_position: Point::from((0.0, 0.0)),
+            // start cursor off-screen to avoid rendering on all outputs at startup
+            cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
         }
     }

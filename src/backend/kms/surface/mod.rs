@@ -38,7 +38,7 @@ use smithay::{
         },
         drm::control::{connector, crtc},
     },
-    utils::{Clock, Monotonic, Rectangle, Transform},
+    utils::{Clock, Monotonic, Point, Rectangle, Size, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 
@@ -904,28 +904,65 @@ impl SurfaceThreadState {
             (shell.cursor_position, shell.cursor_status.clone())
         };
         
-        // create a simple cursor state for rendering
-        let mut cursor_state = crate::backend::render::cursor::CursorStateInner::default();
-        cursor_state.set_position(cursor_position);
+        // check if cursor is on this output
+        let output_loc = self.output.current_location();
+        let output_size = self.output.current_mode()
+            .map(|m| Size::from((m.size.w as i32, m.size.h as i32)))
+            .unwrap_or_default();
+        let output_rect = Rectangle::from_loc_and_size(output_loc, output_size);
         
-        // get current time for animated cursors
-        let now = self.clock.now();
+        // for now, only render cursor on the output that contains the cursor hotspot
+        // this avoids duplicate cursors when outputs overlap at the same position
+        // TODO: once we have proper multi-monitor positioning, check for cursor rect overlap instead
+        let cursor_elements = if output_rect.contains(cursor_position.to_i32_round()) {
+            // create a cursor state for rendering
+            // TODO: share cursor state properly between threads
+            let mut cursor_state = crate::backend::render::cursor::CursorStateInner::default();
+            
+            // get current time for animated cursors
+            let now = self.clock.now();
+            
+            // draw cursor (relative to this output)
+            let relative_pos = cursor_position - output_loc.to_f64();
+            debug!("Rendering cursor on {} at relative position {:?}", self.output.name(), relative_pos);
+            
+            cursor::draw_cursor(
+                &mut renderer,
+                &mut cursor_state,
+                &cursor_status,
+                relative_pos,
+                self.output.current_scale().fractional_scale().into(),
+                now.as_millis() as u32,
+            )
+        } else {
+            // cursor is not on this output
+            Vec::new()
+        };
         
-        // draw cursor (simplified version - cosmic-comp has more complex logic)
-        let cursor_elements = cursor::draw_cursor(
-            &mut renderer,
-            &mut cursor_state,
-            &cursor_status,
-            cursor_position - self.output.current_location().to_f64(),  // relative to output
-            self.output.current_scale().fractional_scale().into(),
-            now.as_millis() as u32,
-        );
+        debug!("Adding {} cursor elements to render for {}", cursor_elements.len(), self.output.name());
         
-        // add cursor elements to the element list (at the end so cursor is on top)
-        for (elem, _hotspot) in cursor_elements {
+        // add cursor elements to the element list (at the beginning to avoid opaque region culling)
+        // cursor should always be visible regardless of what's beneath it
+        for (elem, hotspot) in cursor_elements.into_iter().rev() {
+            // log cursor hotspot and kind for debugging
+            use smithay::backend::renderer::element::Element;
+            let elem_kind = elem.kind();
+            debug!("Cursor element hotspot: {:?}, kind: {:?}", hotspot, elem_kind);
+            
             // wrap cursor element in CosmicElement
-            elements.push(CosmicElement::Cursor(elem));
+            let cosmic_elem = CosmicElement::Cursor(elem);
+            debug!("CosmicElement cursor kind: {:?}", cosmic_elem.kind());
+            elements.insert(0, cosmic_elem);  // insert at beginning
         }
+        
+        // log element kinds for debugging z-order
+        let element_kinds: Vec<_> = elements.iter().map(|e| match e {
+            CosmicElement::Surface(_) => "Surface",
+            CosmicElement::Damage(_) => "Damage", 
+            CosmicElement::Texture(_) => "Texture",
+            CosmicElement::Cursor(_) => "Cursor",
+        }).collect();
+        debug!("Element order for {}: {:?}", self.output.name(), element_kinds);
         
         // mark element gathering done
         self.timings.elements_done(&self.clock);
@@ -941,10 +978,14 @@ impl SurfaceThreadState {
                 &mut renderer,
                 &elements,
                 crate::backend::render::CLEAR_COLOR,  // grey background
-                FrameFlags::empty(),
+                FrameFlags::DEFAULT,  // includes cursor plane scanout
             ).map_err(|e| anyhow::anyhow!("Failed to render frame: {:?}", e))?;
             
-            debug!("[DIRECT] Render result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
+            debug!("[DIRECT] Render result for {}: is_empty={}, cursor_element={:?}, overlay_elements={}", 
+                   self.output.name(), 
+                   frame_result.is_empty,
+                   frame_result.cursor_element.is_some(),
+                   frame_result.overlay_elements.len());
             
             // mark submission time
             self.timings.submitted_for_presentation(&self.clock);
@@ -1077,7 +1118,7 @@ impl SurfaceThreadState {
             &mut renderer,
             &postprocess_elements,
             [0.0, 0.0, 0.0, 0.0],  // black background (already rendered in texture)
-            FrameFlags::empty(),
+            FrameFlags::DEFAULT,  // includes cursor plane scanout
         ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
         
         debug!("[OFFSCREEN] Render result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
