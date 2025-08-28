@@ -43,15 +43,29 @@ impl CompositorHandler for State {
     
     fn commit(&mut self, surface: &WlSurface) {
         // handle window surface commits  
-        if let Some(window) = self.shell.space.elements().find(|w| {
-            w.toplevel().unwrap().wl_surface() == surface
-        }) {
-            window.on_commit();
-            tracing::debug!("Window surface commit handled");
-        }
+        let output = {
+            let mut shell = self.shell.write().unwrap();
+            if let Some(window) = shell.space.elements().find(|w| {
+                w.toplevel().unwrap().wl_surface() == surface
+            }) {
+                window.on_commit();
+                tracing::debug!("Window surface commit handled");
+            }
+            
+            // refresh the space to update damage tracking
+            shell.refresh();
+            
+            // find which output to render
+            shell.visible_output_for_surface(surface).cloned()
+        };
         
-        // refresh the space to update damage tracking
-        self.shell.refresh();
+        // schedule render on the output showing this surface
+        if let Some(output) = output {
+            tracing::debug!("Scheduling render for output {} after surface commit", output.name());
+            self.backend.schedule_render(&output);
+        } else {
+            tracing::debug!("No output found for committed surface");
+        }
     }
 }
 
@@ -97,7 +111,9 @@ impl XdgShellHandler for State {
         // for now, map to the first available output
         if let Some(output) = self.outputs.first() {
             tracing::info!("New window created, adding to output {}", output.name());
-            self.shell.add_window(window, output);
+            self.shell.write().unwrap().add_window(window, output);
+            // trigger initial render for the new window
+            self.backend.schedule_render(output);
         } else {
             tracing::warn!("No outputs available for new window");
         }

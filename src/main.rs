@@ -8,7 +8,6 @@ use smithay::{
     },
     wayland::socket::ListeningSocketSource,
 };
-use std::os::fd::AsFd;
 use tracing::{error, info};
 
 mod backend;

@@ -20,7 +20,6 @@ use smithay::{
         renderer::{
             damage::{OutputDamageTracker, Error as RenderError},
             element::{
-                solid::SolidColorRenderElement, 
                 texture::{TextureRenderBuffer, TextureRenderElement},
                 Kind,
             },
@@ -43,9 +42,12 @@ use smithay::{
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 
-use crate::backend::render::{
-    element::{AsGlowRenderer, CosmicElement},
-    GlMultiRenderer,
+use crate::{
+    backend::render::{
+        element::{AsGlowRenderer, CosmicElement},
+        GlMultiRenderer,
+    },
+    shell::Shell,
 };
 use self::timings::Timings;
 use std::{
@@ -205,6 +207,9 @@ struct SurfaceThreadState {
     // output info
     output: Output,
     
+    // shell reference for element collection
+    shell: Arc<RwLock<Shell>>,
+    
     // event loop
     loop_handle: LoopHandle<'static, Self>,
     clock: Clock<Monotonic>,
@@ -241,6 +246,7 @@ impl Surface {
         primary_node: Arc<RwLock<Option<DrmNode>>>,
         target_node: DrmNode,
         event_loop: &LoopHandle<'static, crate::state::State>,
+        shell: Arc<RwLock<Shell>>,
     ) -> Result<Self> {
         info!("Creating surface for output {} on CRTC {:?}", output.name(), crtc);
         
@@ -251,6 +257,7 @@ impl Surface {
         
         let active_clone = active.clone();
         let output_clone = output.clone();
+        let shell_clone = shell.clone();
         
         // spawn the render thread
         std::thread::Builder::new()
@@ -263,6 +270,7 @@ impl Surface {
                     active_clone,
                     tx2,
                     rx,
+                    shell_clone,
                 ) {
                     error!("Surface thread crashed: {}", err);
                 }
@@ -293,7 +301,6 @@ impl Surface {
     }
     
     /// Schedule a render for this surface
-    #[allow(dead_code)] // will be used when we connect the render loop
     pub fn schedule_render(&self) {
         debug!("Render scheduled for output {}", self.output.name());
         let _ = self.thread_command.send(ThreadCommand::ScheduleRender);
@@ -391,8 +398,9 @@ impl SurfaceManager {
         primary_node: Arc<RwLock<Option<DrmNode>>>,
         target_node: DrmNode,
         event_loop: &LoopHandle<'static, crate::state::State>,
+        shell: Arc<RwLock<Shell>>,
     ) -> Result<()> {
-        let surface = Surface::new(output, crtc, connector, primary_node, target_node, event_loop)?;
+        let surface = Surface::new(output, crtc, connector, primary_node, target_node, event_loop, shell)?;
         self.surfaces.insert(crtc, surface);
         debug!("Surface created for CRTC {:?}", crtc);
         Ok(())
@@ -411,6 +419,12 @@ impl SurfaceManager {
     #[allow(dead_code)] // will be used for output hotplug
     pub fn remove(&mut self, crtc: &crtc::Handle) -> Option<Surface> {
         self.surfaces.remove(crtc)
+    }
+    
+    /// Get all surfaces displaying the given output
+    pub fn surfaces_for_output(&self, output: &Output) -> impl Iterator<Item = &Surface> {
+        self.surfaces.values()
+            .filter(move |s| &s.output == output)
     }
     
     /// Update GPU nodes for all surfaces
@@ -453,6 +467,7 @@ fn surface_thread(
     active: Arc<AtomicBool>,
     thread_sender: Sender<SurfaceCommand>,
     thread_receiver: Channel<ThreadCommand>,
+    shell: Arc<RwLock<Shell>>,
 ) -> Result<()> {
     let name = output.name();
     info!("Starting surface thread for {}", name);
@@ -487,6 +502,7 @@ fn surface_thread(
         thread_sender,
         timings,
         output,
+        shell,
         loop_handle: event_loop.handle(),
         clock,
     };
@@ -735,15 +751,8 @@ impl SurfaceThreadState {
             return Ok(());
         }
         
-        // Phase 2l: Render a visible clear color to verify the render loop works
-        // We'll render a dark blue background to test
-        // Phase 2m will add actual element rendering
-        let elements: Vec<SolidColorRenderElement> = Vec::new();
-        
-        // mark element gathering done
-        self.timings.elements_done(&self.clock);
-        
-        // get format and render node before mutable borrows
+        // Phase 4b: Collect render elements from the shell
+        // get appropriate renderer before borrowing shell
         let format = self.compositor.as_ref().unwrap().format();
         let render_node = self.render_node_for_output();
         
@@ -757,6 +766,20 @@ impl SurfaceThreadState {
             self.api.single_renderer(&self.target_node)
                 .map_err(|e| anyhow::anyhow!("Failed to get single-gpu renderer: {}", e))?
         };
+        
+        // collect elements from shell
+        let elements = {
+            let shell = self.shell.read().unwrap();
+            debug!("Collecting elements from shell for output {}", self.output.name());
+            let elements = shell.render_elements(&self.output, &mut renderer);
+            debug!("Collected {} elements from shell", elements.len());
+            elements
+        };
+        
+        // mark element gathering done
+        self.timings.elements_done(&self.clock);
+        
+        // renderer already obtained above when collecting elements
         
         // Phase 2jb: Render to offscreen texture using PostprocessState
         // This follows cosmic-comp's approach exactly

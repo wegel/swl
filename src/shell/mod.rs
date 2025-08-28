@@ -2,14 +2,16 @@
 
 use smithay::{
     backend::renderer::{
-        element::{surface::WaylandSurfaceRenderElement, AsRenderElements},
-        ImportAll, Renderer,
+        element::AsRenderElements,
+        ImportAll, ImportMem, Renderer,
     },
     desktop::{Space, Window},
     output::Output,
     utils::{Logical, Point, Scale},
 };
 use std::collections::HashMap;
+
+use crate::backend::render::element::{AsGlowRenderer, CosmicElement};
 
 /// A simple shell for managing windows
 pub struct Shell {
@@ -34,6 +36,13 @@ impl Shell {
             next_window_id: 1,
             focused_window: None,
         }
+    }
+    
+    /// Add an output to the shell's space
+    pub fn add_output(&mut self, output: &Output) {
+        // map the output at origin (we don't support multi-monitor positioning yet)
+        self.space.map_output(output, Point::from((0, 0)));
+        tracing::info!("Added output {} to shell space", output.name());
     }
     
     /// Add a new window to the shell
@@ -101,10 +110,35 @@ impl Shell {
         self.space.refresh();
     }
     
+    /// Find which output a surface is visible on
+    pub fn visible_output_for_surface(&self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> Option<&Output> {
+        // find the window containing this surface
+        tracing::debug!("Looking for output for surface");
+        for window in self.space.elements() {
+            if window.toplevel().unwrap().wl_surface() == surface {
+                // find which output this window is on
+                for output in self.space.outputs() {
+                    let output_geometry = self.space.output_geometry(output).unwrap();
+                    if let Some(window_location) = self.space.element_location(window) {
+                        // check if window intersects with output
+                        let window_geometry = smithay::utils::Rectangle::from_extremities(
+                            window_location,
+                            window_location + window.geometry().size,
+                        );
+                        if output_geometry.overlaps(window_geometry) {
+                            return Some(output);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+    
     /// Get render elements for all windows on the given output
-    pub fn render_elements<R>(&self, output: &Output, renderer: &mut R) -> Vec<WaylandSurfaceRenderElement<R>>
+    pub fn render_elements<R>(&self, output: &Output, renderer: &mut R) -> Vec<CosmicElement<R>>
     where
-        R: Renderer + ImportAll,
+        R: AsGlowRenderer + Renderer + ImportAll + ImportMem,
         R::TextureId: Clone + 'static,
     {
         let mut elements = Vec::new();
@@ -113,13 +147,18 @@ impl Shell {
         // render all windows in the space
         for window in self.space.elements() {
             if let Some(location) = self.space.element_location(window) {
+                // get surface render elements and wrap them in CosmicElement
+                let surface_elements = window.render_elements(
+                    renderer,
+                    location.to_physical_precise_round(output_scale),
+                    output_scale,
+                    1.0, // alpha
+                );
+                
+                // wrap each surface element in CosmicElement::Surface
                 elements.extend(
-                    window.render_elements(
-                        renderer,
-                        location.to_physical_precise_round(output_scale),
-                        output_scale,
-                        1.0, // alpha
-                    )
+                    surface_elements.into_iter()
+                        .map(|elem| CosmicElement::Surface(elem))
                 );
             }
         }

@@ -19,6 +19,7 @@ use smithay::{
         session::{libseat::LibSeatSession, Event as SessionEvent, Session},
         udev::{UdevBackend, UdevEvent},
     },
+    output::Output,
     reexports::{
         calloop::{Dispatcher, EventLoop, LoopHandle},
         input::{self, Libinput},
@@ -42,6 +43,15 @@ pub struct KmsState {
     pub primary_gpu: Option<DrmNode>,
     pub primary_node: Arc<RwLock<Option<DrmNode>>>,
     pub gpu_manager: GpuManager<GbmGlowBackend<DrmDeviceFd>>,
+}
+
+impl KmsState {
+    /// Schedule a render for the given output on all surfaces displaying it
+    pub fn schedule_render(&mut self, output: &Output) {
+        for device in self.drm_devices.values() {
+            device.schedule_render(output);
+        }
+    }
 }
 
 pub fn init_backend(

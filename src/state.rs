@@ -4,6 +4,7 @@ use crate::{
     backend::kms::{KmsState, Device},
     shell::Shell,
 };
+use std::sync::{Arc, RwLock};
 use smithay::{
     backend::{
         drm::DrmNode,
@@ -47,7 +48,7 @@ pub struct State {
     pub shm_state: ShmState,
     pub data_device_state: DataDeviceState,
     pub output_manager_state: OutputManagerState,
-    pub shell: Shell,
+    pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
     session_active: bool,
 }
@@ -57,6 +58,16 @@ pub struct State {
 impl State {
     pub fn socket_name(&self) -> &str {
         &self.socket_name
+    }
+}
+
+impl BackendData {
+    /// Schedule a render for the given output
+    pub fn schedule_render(&mut self, output: &Output) {
+        match self {
+            BackendData::Kms(kms) => kms.schedule_render(output),
+            BackendData::Uninitialized => {},
+        }
     }
 }
 
@@ -84,7 +95,7 @@ impl State {
         seat.add_pointer();
         
         // create the shell
-        let shell = Shell::new();
+        let shell = Arc::new(RwLock::new(Shell::new()));
         
         Self {
             display_handle: display_handle.clone(),
@@ -174,8 +185,12 @@ impl State {
                 }
                 
                 // scan for connected outputs
-                match device.scan_outputs(&self.display_handle, &self.loop_handle, &mut kms.gpu_manager) {
+                match device.scan_outputs(&self.display_handle, &self.loop_handle, &mut kms.gpu_manager, self.shell.clone()) {
                     Ok(outputs) => {
+                        // add outputs to the shell's space
+                        for output in &outputs {
+                            self.shell.write().unwrap().add_output(output);
+                        }
                         // add outputs to our state
                         self.outputs.extend(outputs);
                     }
