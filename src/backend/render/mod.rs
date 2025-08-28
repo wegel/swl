@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+pub mod cursor;
+pub mod element;
+
 use smithay::{
     backend::{
         allocator::{dmabuf::{Dmabuf, AnyError, DmabufAllocator}, gbm::GbmAllocator, Allocator},
@@ -154,8 +157,6 @@ impl ApiDevice for GbmGlowDevice {
         &self.node
     }
 }
-
-pub mod element;
 
 use smithay::backend::{
     drm::DrmDeviceFd,

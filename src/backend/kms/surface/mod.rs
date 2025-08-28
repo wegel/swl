@@ -44,6 +44,7 @@ use smithay::{
 
 use crate::{
     backend::render::{
+        cursor,
         element::{AsGlowRenderer, CosmicElement},
         GlMultiRenderer,
     },
@@ -888,10 +889,43 @@ impl SurfaceThreadState {
         };
         
         // collect elements from shell
-        let elements = {
+        let mut elements = {
             let shell = self.shell.read().unwrap();
             shell.render_elements(&self.output, &mut renderer)
         };
+        
+        // add cursor elements (following cosmic-comp's approach)
+        // Phase 4f: Add cursor rendering - software cursor for now
+        // TODO: Hardware cursor via DRM planes will be added later in this phase
+        
+        // get cursor info from shell (which is updated by input handler)
+        let (cursor_position, cursor_status) = {
+            let shell = self.shell.read().unwrap();
+            (shell.cursor_position, shell.cursor_status.clone())
+        };
+        
+        // create a simple cursor state for rendering
+        let mut cursor_state = crate::backend::render::cursor::CursorStateInner::default();
+        cursor_state.set_position(cursor_position);
+        
+        // get current time for animated cursors
+        let now = self.clock.now();
+        
+        // draw cursor (simplified version - cosmic-comp has more complex logic)
+        let cursor_elements = cursor::draw_cursor(
+            &mut renderer,
+            &mut cursor_state,
+            &cursor_status,
+            cursor_position - self.output.current_location().to_f64(),  // relative to output
+            self.output.current_scale().fractional_scale().into(),
+            now.as_millis() as u32,
+        );
+        
+        // add cursor elements to the element list (at the end so cursor is on top)
+        for (elem, _hotspot) in cursor_elements {
+            // wrap cursor element in CosmicElement
+            elements.push(CosmicElement::Cursor(elem));
+        }
         
         // mark element gathering done
         self.timings.elements_done(&self.clock);

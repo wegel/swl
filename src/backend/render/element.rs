@@ -5,6 +5,7 @@ use smithay::{
         element::{
             surface::WaylandSurfaceRenderElement,
             texture::TextureRenderElement,
+            memory::MemoryRenderBufferRenderElement,
             Element, Id, Kind, RenderElement,
         },
         gles::{GlesError, GlesTexture},
@@ -16,8 +17,7 @@ use smithay::{
 };
 
 use super::GlMultiRenderer;
-
-use crate::backend::render::GlMultiError;
+use crate::backend::render::{cursor::CursorRenderElement, GlMultiError};
 
 /// Trait for converting GlesError to renderer-specific errors
 #[allow(dead_code)] // will be used for error conversion in rendering
@@ -188,6 +188,8 @@ where
     Damage(DamageElement),
     /// Texture element for offscreen rendering composition
     Texture(TextureRenderElement<GlesTexture>),
+    /// Cursor element
+    Cursor(CursorRenderElement<R>),
 }
 
 impl<R> Element for CosmicElement<R>
@@ -200,6 +202,7 @@ where
             CosmicElement::Surface(elem) => elem.id(),
             CosmicElement::Damage(elem) => elem.id(),
             CosmicElement::Texture(elem) => elem.id(),
+            CosmicElement::Cursor(elem) => elem.id(),
         }
     }
 
@@ -208,6 +211,7 @@ where
             CosmicElement::Surface(elem) => elem.current_commit(),
             CosmicElement::Damage(elem) => elem.current_commit(),
             CosmicElement::Texture(elem) => elem.current_commit(),
+            CosmicElement::Cursor(elem) => elem.current_commit(),
         }
     }
 
@@ -216,6 +220,7 @@ where
             CosmicElement::Surface(elem) => elem.src(),
             CosmicElement::Damage(elem) => elem.src(),
             CosmicElement::Texture(elem) => elem.src(),
+            CosmicElement::Cursor(elem) => elem.src(),
         }
     }
 
@@ -224,6 +229,7 @@ where
             CosmicElement::Surface(elem) => elem.geometry(scale),
             CosmicElement::Damage(elem) => elem.geometry(scale),
             CosmicElement::Texture(elem) => elem.geometry(scale),
+            CosmicElement::Cursor(elem) => elem.geometry(scale),
         }
     }
 
@@ -232,6 +238,7 @@ where
             CosmicElement::Surface(elem) => elem.location(scale),
             CosmicElement::Damage(elem) => elem.location(scale),
             CosmicElement::Texture(elem) => elem.location(scale),
+            CosmicElement::Cursor(elem) => elem.location(scale),
         }
     }
 
@@ -240,6 +247,7 @@ where
             CosmicElement::Surface(elem) => elem.transform(),
             CosmicElement::Damage(elem) => elem.transform(),
             CosmicElement::Texture(elem) => elem.transform(),
+            CosmicElement::Cursor(elem) => elem.transform(),
         }
     }
 
@@ -248,6 +256,7 @@ where
             CosmicElement::Surface(elem) => elem.damage_since(scale, commit),
             CosmicElement::Damage(elem) => elem.damage_since(scale, commit),
             CosmicElement::Texture(elem) => elem.damage_since(scale, commit),
+            CosmicElement::Cursor(elem) => elem.damage_since(scale, commit),
         }
     }
 
@@ -256,6 +265,7 @@ where
             CosmicElement::Surface(elem) => elem.opaque_regions(scale),
             CosmicElement::Damage(elem) => elem.opaque_regions(scale),
             CosmicElement::Texture(elem) => elem.opaque_regions(scale),
+            CosmicElement::Cursor(elem) => elem.opaque_regions(scale),
         }
     }
 
@@ -264,6 +274,7 @@ where
             CosmicElement::Surface(elem) => elem.alpha(),
             CosmicElement::Damage(elem) => elem.alpha(),
             CosmicElement::Texture(elem) => elem.alpha(),
+            CosmicElement::Cursor(elem) => elem.alpha(),
         }
     }
 
@@ -272,6 +283,7 @@ where
             CosmicElement::Surface(elem) => elem.kind(),
             CosmicElement::Damage(elem) => elem.kind(),
             CosmicElement::Texture(elem) => elem.kind(),
+            CosmicElement::Cursor(elem) => elem.kind(),
         }
     }
 }
@@ -301,6 +313,7 @@ where
                 damage,
                 opaque_regions,
             ).map_err(R::Error::from_gles_error),
+            CosmicElement::Cursor(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
         }
     }
 }

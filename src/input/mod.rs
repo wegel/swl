@@ -109,6 +109,14 @@ impl State {
                             time,
                         },
                     );
+                    
+                    // update cursor position in shell (for rendering)
+                    self.shell.write().unwrap().cursor_position = location;
+                    
+                    // schedule render for the output containing the cursor
+                    if let Some(output) = self.shell.read().unwrap().output_at(location) {
+                        self.backend.schedule_render(&output);
+                    }
                 }
             }
             
@@ -139,6 +147,14 @@ impl State {
                             time,
                         },
                     );
+                    
+                    // update cursor position in shell (for rendering)
+                    self.shell.write().unwrap().cursor_position = location;
+                    
+                    // schedule render for the output containing the cursor
+                    if let Some(output) = self.shell.read().unwrap().output_at(location) {
+                        self.backend.schedule_render(&output);
+                    }
                 }
             }
             
@@ -220,8 +236,19 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
     
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: smithay::input::pointer::CursorImageStatus) {
-        // we'll handle cursor images later
+    fn cursor_image(&mut self, seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
+        // store cursor status in seat user data (following cosmic-comp)
+        let cursor_status = seat.user_data().get::<std::sync::Mutex<smithay::input::pointer::CursorImageStatus>>().unwrap();
+        *cursor_status.lock().unwrap() = image.clone();
+        
+        // also store in shell for rendering
+        self.shell.write().unwrap().cursor_status = image;
+        
+        // schedule render for the output containing the cursor
+        let cursor_position = self.shell.read().unwrap().cursor_position;
+        if let Some(output) = self.shell.read().unwrap().output_at(cursor_position) {
+            self.backend.schedule_render(&output);
+        }
     }
     
     fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&Self::KeyboardFocus>) {

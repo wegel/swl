@@ -2,9 +2,10 @@
 
 use crate::{
     backend::kms::{KmsState, Device},
+    backend::render::cursor::{CursorState, CursorStateInner},
     shell::Shell,
 };
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use smithay::{
     backend::{
         drm::DrmNode,
@@ -52,6 +53,7 @@ pub struct State {
     pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
     pub pending_windows: Vec<(ToplevelSurface, Window)>,
+    pub cursor_state: CursorState,
     session_active: bool,
 }
 
@@ -96,6 +98,11 @@ impl State {
         seat.add_keyboard(Default::default(), 200, 25).unwrap();
         seat.add_pointer();
         
+        // add cursor status to seat user data (following cosmic-comp)
+        seat.user_data().insert_if_missing_threadsafe(|| {
+            Mutex::new(smithay::input::pointer::CursorImageStatus::default_named())
+        });
+        
         // create the shell
         let shell = Arc::new(RwLock::new(Shell::new()));
         
@@ -116,6 +123,7 @@ impl State {
             shell,
             outputs: Vec::new(),
             pending_windows: Vec::new(),
+            cursor_state: Mutex::new(CursorStateInner::default()),
             session_active: false,
         }
     }

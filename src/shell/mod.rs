@@ -6,6 +6,7 @@ use smithay::{
         ImportAll, ImportMem, Renderer,
     },
     desktop::{Space, Window},
+    input::pointer::CursorImageStatus,
     output::Output,
     utils::{Logical, Point, Scale},
 };
@@ -26,6 +27,12 @@ pub struct Shell {
     
     /// The currently focused window
     pub focused_window: Option<Window>,
+    
+    /// Cursor position (relative to space origin)
+    pub cursor_position: Point<f64, Logical>,
+    
+    /// Cursor image status
+    pub cursor_status: CursorImageStatus,
 }
 
 impl Shell {
@@ -35,6 +42,8 @@ impl Shell {
             windows: HashMap::new(),
             next_window_id: 1,
             focused_window: None,
+            cursor_position: Point::from((0.0, 0.0)),
+            cursor_status: CursorImageStatus::default_named(),
         }
     }
     
@@ -158,6 +167,14 @@ impl Shell {
         // we don't have compositor-side animations yet (window movement, fading, etc)
         // client animations are handled through proper frame callbacks in the backend
         false
+    }
+    
+    /// Get the output at the given position
+    pub fn output_at(&self, position: Point<f64, Logical>) -> Option<Output> {
+        self.space.outputs().find(|output| {
+            let geometry = self.space.output_geometry(output).unwrap();
+            geometry.to_f64().contains(position)
+        }).cloned()
     }
     
     /// Get render elements for all windows on the given output

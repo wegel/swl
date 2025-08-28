@@ -31,6 +31,9 @@ gbm = "0.18"
 # Event loop
 calloop = { version = "0.14.2", features = ["executor"] }
 
+# Cursor support
+xcursor = "0.3.5"
+
 # Error handling and logging
 anyhow = { version = "1.0", features = ["backtrace"] }
 thiserror = "2.0"
