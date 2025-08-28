@@ -3,9 +3,11 @@
 pub mod handlers;
 
 use smithay::{
+    backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
-    desktop::Window,
+    desktop::{Window, utils::send_frames_surface_tree, space::SpaceElement},
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
+    utils::{Clock, Monotonic},
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
@@ -42,29 +44,76 @@ impl CompositorHandler for State {
     }
     
     fn commit(&mut self, surface: &WlSurface) {
-        // handle window surface commits  
-        let output = {
-            let mut shell = self.shell.write().unwrap();
-            if let Some(window) = shell.space.elements().find(|w| {
-                w.toplevel().unwrap().wl_surface() == surface
-            }) {
-                window.on_commit();
-                tracing::debug!("Window surface commit handled");
-            }
-            
-            // refresh the space to update damage tracking
-            shell.refresh();
-            
-            // find which output to render
-            shell.visible_output_for_surface(surface).cloned()
-        };
+        // first load the buffer for various smithay helper functions (which also initializes the RendererSurfaceState)
+        on_commit_buffer_handler::<Self>(surface);
         
-        // schedule render on the output showing this surface
-        if let Some(output) = output {
-            tracing::debug!("Scheduling render for output {} after surface commit", output.name());
-            self.backend.schedule_render(&output);
-        } else {
-            tracing::debug!("No output found for committed surface");
+        // check if this is a pending window that should be mapped
+        let mut mapped = false;
+        if let Some(index) = self.pending_windows.iter().position(|(toplevel, _)| {
+            toplevel.wl_surface() == surface
+        }) {
+            // check if surface now has a buffer
+            if with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false) {
+                let (toplevel, window) = self.pending_windows.remove(index);
+                
+                // the window is ready to be mapped - call on_commit to update geometry
+                window.on_commit();
+                window.refresh();
+                
+                if let Some(output) = self.outputs.first() {
+                    tracing::info!("Mapping pending window to output {} (geometry: {:?})", 
+                                  output.name(), window.geometry());
+                    self.shell.write().unwrap().add_window(window.clone(), output);
+                    
+                    // send initial frame callback
+                    let clock = Clock::<Monotonic>::new();
+                    send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
+                    
+                    self.backend.schedule_render(output);
+                    mapped = true;
+                } else {
+                    tracing::warn!("No outputs available for window mapping");
+                    // put it back in pending
+                    self.pending_windows.push((toplevel, window));
+                }
+            } else {
+                tracing::debug!("Pending window surface committed but no buffer yet");
+            }
+        }
+        
+        if !mapped {
+            // handle regular window surface commits  
+            let output = {
+                let mut shell = self.shell.write().unwrap();
+                let output = shell.visible_output_for_surface(surface).cloned();
+                
+                if let Some(window) = shell.space.elements().find(|w| {
+                    w.toplevel().unwrap().wl_surface() == surface
+                }) {
+                    window.on_commit();
+                    tracing::debug!("Window surface commit handled");
+                    
+                    // send frame callback to let client know it can render the next frame
+                    if let Some(ref output) = output {
+                        let clock = Clock::<Monotonic>::new();
+                        send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
+                        tracing::debug!("Sent frame callback to window surface");
+                    }
+                }
+                
+                // refresh the space to update damage tracking
+                shell.refresh();
+                
+                output
+            };
+            
+            // schedule render on the output showing this surface
+            if let Some(output) = output {
+                tracing::debug!("Scheduling render for output {} after surface commit", output.name());
+                self.backend.schedule_render(&output);
+            } else {
+                tracing::debug!("No output found for committed surface");
+            }
         }
     }
 }
@@ -103,20 +152,18 @@ impl XdgShellHandler for State {
         tracing::info!("New toplevel surface requested");
         let window = Window::new_wayland_window(surface.clone());
         
-        // send initial configure
+        // send initial configure with size and activated state
+        // tell the window it's activated and suggest a size
+        surface.with_pending_state(|state| {
+            state.states.set(xdg_toplevel::State::Activated);
+            state.size = Some((800, 600).into());
+        });
         surface.send_configure();
-        tracing::debug!("Sent initial configure to toplevel");
+        tracing::debug!("Sent initial configure to toplevel (800x600, activated)");
         
-        // add the window to our shell
-        // for now, map to the first available output
-        if let Some(output) = self.outputs.first() {
-            tracing::info!("New window created, adding to output {}", output.name());
-            self.shell.write().unwrap().add_window(window, output);
-            // trigger initial render for the new window
-            self.backend.schedule_render(output);
-        } else {
-            tracing::warn!("No outputs available for new window");
-        }
+        // store as pending window - will be mapped after first commit with buffer
+        self.pending_windows.push((surface, window));
+        tracing::info!("Window added to pending list, waiting for initial commit with buffer");
     }
     
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {

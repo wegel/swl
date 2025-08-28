@@ -50,24 +50,31 @@ impl Shell {
         let id = self.next_window_id;
         self.next_window_id += 1;
         
+        tracing::info!("Adding window {} to shell", id);
+        
         // add to our tracking
         self.windows.insert(id, window.clone());
         
         // map the window to the space
         let output_size = output.current_mode().unwrap().size;
         let window_size = window.geometry().size;
+        tracing::debug!("Window geometry: {:?}, output size: {:?}", window_size, output_size);
         
         // center the window on the output for now (no tiling yet)
         let x = (output_size.w - window_size.w) / 2;
         let y = (output_size.h - window_size.h) / 2;
         let location = Point::from((x, y));
         
+        tracing::info!("Mapping window {} to space at location {:?}", id, location);
         self.space.map_element(window.clone(), location, false);
         
         // set as focused if no window is focused
         if self.focused_window.is_none() {
-            self.focused_window = Some(window);
+            self.focused_window = Some(window.clone());
+            tracing::debug!("Set window {} as focused", id);
         }
+        
+        tracing::info!("Window {} added successfully. Total windows: {}", id, self.windows.len());
     }
     
     /// Remove a window from the shell
@@ -144,9 +151,14 @@ impl Shell {
         let mut elements = Vec::new();
         let output_scale = Scale::from(output.current_scale().fractional_scale());
         
+        let window_count = self.space.elements().count();
+        tracing::debug!("Rendering {} windows in space", window_count);
+        
         // render all windows in the space
         for window in self.space.elements() {
             if let Some(location) = self.space.element_location(window) {
+                tracing::debug!("Rendering window at location {:?}", location);
+                
                 // get surface render elements and wrap them in CosmicElement
                 let surface_elements = window.render_elements(
                     renderer,
@@ -154,6 +166,8 @@ impl Shell {
                     output_scale,
                     1.0, // alpha
                 );
+                
+                tracing::debug!("Window produced {} render elements", surface_elements.len());
                 
                 // wrap each surface element in CosmicElement::Surface
                 elements.extend(
@@ -163,6 +177,7 @@ impl Shell {
             }
         }
         
+        tracing::debug!("Total render elements: {}", elements.len());
         elements
     }
 }

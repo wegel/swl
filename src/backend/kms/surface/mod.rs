@@ -427,6 +427,13 @@ impl SurfaceManager {
             .filter(move |s| &s.output == output)
     }
     
+    /// Forward VBlank event to the appropriate surface
+    pub fn on_vblank(&self, crtc: crtc::Handle, metadata: Option<DrmEventMetadata>) {
+        if let Some(surface) = self.surfaces.get(&crtc) {
+            surface.on_vblank(metadata);
+        }
+    }
+    
     /// Update GPU nodes for all surfaces
     pub fn update_surface_nodes(
         &mut self,
@@ -770,10 +777,7 @@ impl SurfaceThreadState {
         // collect elements from shell
         let elements = {
             let shell = self.shell.read().unwrap();
-            debug!("Collecting elements from shell for output {}", self.output.name());
-            let elements = shell.render_elements(&self.output, &mut renderer);
-            debug!("Collected {} elements from shell", elements.len());
-            elements
+            shell.render_elements(&self.output, &mut renderer)
         };
         
         // mark element gathering done

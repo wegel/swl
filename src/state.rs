@@ -11,13 +11,14 @@ use smithay::{
         input::InputEvent,
         session::Session,
     },
+    desktop::Window,
     input::{Seat, SeatState},
     output::Output,
     wayland::{
         compositor::CompositorState,
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState,
+        shell::xdg::{XdgShellState, ToplevelSurface},
         shm::ShmState,
     },
     reexports::{
@@ -50,6 +51,7 @@ pub struct State {
     pub output_manager_state: OutputManagerState,
     pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
+    pub pending_windows: Vec<(ToplevelSurface, Window)>,
     session_active: bool,
 }
 
@@ -113,6 +115,7 @@ impl State {
             output_manager_state,
             shell,
             outputs: Vec::new(),
+            pending_windows: Vec::new(),
             session_active: false,
         }
     }

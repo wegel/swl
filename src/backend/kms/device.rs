@@ -417,13 +417,19 @@ impl Device {
             render_formats,
         );
         
-        // register DRM event handler
+        // register DRM event handler - need to clone drm_node for the closure
+        let node_for_handler = drm_node.clone();
         let token = event_loop
-            .insert_source(notifier, move |event, _metadata, _state| {
+            .insert_source(notifier, move |event, metadata, state: &mut crate::state::State| {
                 match event {
                     DrmEvent::VBlank(crtc) => {
                         debug!("VBlank event for CRTC {:?}", crtc);
-                        // we'll handle vblank events when we have surfaces
+                        // forward to the surface via surface manager
+                        if let crate::state::BackendData::Kms(kms) = &state.backend {
+                            if let Some(device) = kms.drm_devices.get(&node_for_handler) {
+                                device.surface_manager.on_vblank(crtc, metadata.take());
+                            }
+                        }
                     }
                     DrmEvent::Error(err) => {
                         error!(?err, "DRM device error");
