@@ -11,6 +11,7 @@ use smithay::{
 use tracing::{error, info};
 
 mod backend;
+mod environment;
 mod input;
 mod shell;
 mod state;
@@ -46,6 +47,9 @@ fn main_inner() -> Result<()> {
     
     // init backend
     backend::init_backend(&display_handle, &mut event_loop, &mut state)?;
+
+    // update environment variables for systemd and D-Bus
+    environment::update_environment(&state.socket_name);
 
     info!("Starting event loop");
     
