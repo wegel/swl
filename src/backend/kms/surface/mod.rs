@@ -14,7 +14,7 @@ use smithay::{
             compositor::FrameFlags,
             exporter::gbm::GbmFramebufferExporter,
             output::DrmOutput,
-            DrmDeviceFd, DrmNode, DrmEventMetadata, DrmEventTime,
+            DrmDeviceFd, DrmNode, DrmEventMetadata, DrmEventTime, VrrSupport,
         },
         egl::EGLContext,
         renderer::{
@@ -71,6 +71,23 @@ pub type GbmDrmOutput = DrmOutput<
     DrmDeviceFd,
 >;
 
+/// Adaptive sync (VRR) configuration modes
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AdaptiveSync {
+    /// Never use VRR
+    Disabled,
+    /// Use VRR for fullscreen content
+    Enabled,
+    /// Always use VRR (testing)
+    Force,
+}
+
+impl Default for AdaptiveSync {
+    fn default() -> Self {
+        AdaptiveSync::Disabled
+    }
+}
+
 /// Commands sent to the surface render thread
 #[derive(Debug)]
 #[allow(dead_code)] // variants will be used when we connect the render loop
@@ -93,6 +110,10 @@ pub enum ThreadCommand {
     ScheduleRender,
     /// VBlank event occurred
     VBlank(Option<DrmEventMetadata>),
+    /// Check if adaptive sync is available
+    AdaptiveSyncAvailable(std::sync::mpsc::SyncSender<Result<Option<VrrSupport>>>),
+    /// Set adaptive sync mode
+    UseAdaptiveSync(AdaptiveSync),
     /// End the thread
     End,
 }
@@ -225,6 +246,9 @@ struct SurfaceThreadState {
     thread_sender: Sender<SurfaceCommand>,
     timings: Timings,
     
+    // adaptive sync
+    vrr_mode: AdaptiveSync,
+    
     // output info
     output: Output,
     
@@ -237,9 +261,6 @@ struct SurfaceThreadState {
     
     // frame callback sequence number to prevent empty-damage commit busy loops
     frame_callback_seq: usize,
-    
-    // Phase 5f: Adaptive sync support
-    vrr_enabled: bool,
 }
 
 /// Dmabuf feedback for a surface
@@ -362,6 +383,22 @@ impl Surface {
     pub fn remove_node(&self, node: DrmNode) {
         info!("Removing GPU node {:?} from surface {}", node, self.output.name());
         let _ = self.thread_command.send(ThreadCommand::NodeRemoved { node });
+    }
+    
+    /// Check if adaptive sync (VRR) is supported on this output
+    pub fn adaptive_sync_support(&self) -> Result<Option<VrrSupport>> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let _ = self
+            .thread_command
+            .send(ThreadCommand::AdaptiveSyncAvailable(tx));
+        rx.recv().context("Surface thread died")?
+    }
+    
+    /// Set adaptive sync mode for this surface
+    pub fn use_adaptive_sync(&mut self, vrr: AdaptiveSync) {
+        let _ = self
+            .thread_command
+            .send(ThreadCommand::UseAdaptiveSync(vrr));
     }
     
     /// Update dmabuf feedback based on current formats
@@ -534,10 +571,26 @@ fn surface_thread(
         state: QueueState::Idle,
         thread_sender,
         timings,
+        // allow overriding VRR mode via environment variable for testing
+        vrr_mode: {
+            let mode = std::env::var("SWL_VRR_MODE")
+                .ok()
+                .and_then(|mode| match mode.as_str() {
+                    "force" | "Force" | "FORCE" => Some(AdaptiveSync::Force),
+                    "enabled" | "Enabled" | "ENABLED" => Some(AdaptiveSync::Enabled),
+                    "disabled" | "Disabled" | "DISABLED" => Some(AdaptiveSync::Disabled),
+                    _ => {
+                        warn!("Invalid SWL_VRR_MODE value: {}", mode);
+                        None
+                    }
+                })
+                .unwrap_or(AdaptiveSync::Enabled); // default to Enabled (opportunistic VRR)
+            debug!("VRR mode for {}: {:?}", output.name(), mode);
+            mode
+        },
         output,
         shell,
         frame_callback_seq: 0,
-        vrr_enabled: false,  // Phase 5f: VRR disabled by default
         loop_handle: event_loop.handle(),
         clock,
     };
@@ -562,6 +615,23 @@ fn surface_thread(
             }
             Event::Msg(ThreadCommand::VBlank(metadata)) => {
                 _state.on_vblank(metadata);
+            }
+            Event::Msg(ThreadCommand::AdaptiveSyncAvailable(result)) => {
+                if let Some(compositor) = _state.compositor.as_mut() {
+                    let _ = result.send(
+                        compositor
+                            .with_compositor(|c| {
+                                c.vrr_supported(c.pending_connectors().into_iter().next().unwrap())
+                            })
+                            .map(Some)
+                            .map_err(|e| anyhow::anyhow!("Failed to check VRR support: {}", e))
+                    );
+                } else {
+                    let _ = result.send(Err(anyhow::anyhow!("Set vrr with inactive surface")));
+                }
+            }
+            Event::Msg(ThreadCommand::UseAdaptiveSync(vrr)) => {
+                _state.vrr_mode = vrr;
             }
             Event::Msg(ThreadCommand::End) => {
                 signal.stop();
@@ -593,6 +663,20 @@ impl SurfaceThreadState {
         const _SAFETY_MARGIN: u32 = 2; // magic two frames margin from kwin (unused for now)
         let min_min_refresh_interval = Duration::from_secs_f64(1.0 / 30.0); // 30Hz
         self.timings.set_min_refresh_interval(Some(min_min_refresh_interval));
+        
+        // Phase 4h: Check VRR support on this output
+        let vrr_support = compositor.with_compositor(|c| {
+            c.vrr_supported(c.pending_connectors().into_iter().next().unwrap())
+        }).ok();
+        
+        // store VRR support in output user data
+        if let Some(support) = vrr_support {
+            debug!("VRR support for {}: {:?}", self.output.name(), support);
+            // TODO: Store in output user_data when we add OutputExt trait
+            // self.output.set_adaptive_sync_support(Some(support));
+        } else {
+            debug!("VRR not supported on {}", self.output.name());
+        }
         
         // create PostprocessState if not already done
         if self.postprocess.is_none() && self.output.current_mode().is_some() {
@@ -661,14 +745,13 @@ impl SurfaceThreadState {
         false
     }
     
-    /// Phase 5f: Check and enable VRR if supported
+    /// Phase 4h: Check and enable VRR if supported
     fn update_vrr(&mut self, enable: bool) {
         if let Some(compositor) = self.compositor.as_mut() {
             // try to enable/disable VRR
             if let Err(e) = compositor.with_compositor(|c| c.use_vrr(enable)) {
                 debug!("VRR update failed: {:?}", e);
             } else {
-                self.vrr_enabled = enable;
                 debug!("VRR {} for output {}", 
                     if enable { "enabled" } else { "disabled" },
                     self.output.name());
@@ -999,10 +1082,32 @@ impl SurfaceThreadState {
         // mark element gathering done
         self.timings.elements_done(&self.clock);
         
+        // Phase 4h: Determine if VRR should be active
+        let has_fullscreen = {
+            let shell = self.shell.read().unwrap();
+            shell.get_fullscreen().is_some()
+        };
+        
+        let vrr = match self.vrr_mode {
+            AdaptiveSync::Force => true,
+            AdaptiveSync::Enabled => has_fullscreen,
+            AdaptiveSync::Disabled => false,
+        };
+        
+        // set VRR on compositor before rendering
+        if let Some(compositor) = self.compositor.as_mut() {
+            if let Err(err) = compositor.with_compositor(|c| c.use_vrr(vrr)) {
+                warn!("Unable to set VRR: {}", err);
+            }
+        }
+        
+        // update timings for VRR
+        self.timings.set_vrr(vrr);
+        
         // Phase 5a: Choose between direct and offscreen rendering
         if use_direct_render {
             // Phase 5a: Direct rendering path - render directly to DRM framebuffer
-            debug!("[DIRECT] Starting render for {}", self.output.name());
+            debug!("[DIRECT] Starting render for {} (VRR={})", self.output.name(), vrr);
             
             // render directly to the DRM compositor's framebuffer
             // this gives us proper buffer age from the swapchain

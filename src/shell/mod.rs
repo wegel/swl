@@ -34,6 +34,9 @@ pub struct Shell {
     /// The currently focused window
     pub focused_window: Option<Window>,
     
+    /// Fullscreen window (if any)
+    pub fullscreen_window: Option<Window>,
+    
     /// Cursor position (relative to space origin)
     pub cursor_position: Point<f64, Logical>,
     
@@ -48,6 +51,7 @@ impl Shell {
             windows: HashMap::new(),
             next_window_id: 1,
             focused_window: None,
+            fullscreen_window: None,
             // start cursor off-screen to avoid rendering on all outputs at startup
             cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
@@ -137,6 +141,20 @@ impl Shell {
                 geometry.to_f64().contains(point)
             })
             .cloned()
+    }
+    
+    /// Get the current fullscreen window (if any)
+    pub fn get_fullscreen(&self) -> Option<&Window> {
+        self.fullscreen_window.as_ref()
+    }
+    
+    /// Set a window as fullscreen
+    pub fn set_fullscreen(&mut self, window: Window, fullscreen: bool) {
+        if fullscreen {
+            self.fullscreen_window = Some(window);
+        } else if self.fullscreen_window.as_ref() == Some(&window) {
+            self.fullscreen_window = None;
+        }
     }
     
     /// Refresh the space (needed for damage tracking)

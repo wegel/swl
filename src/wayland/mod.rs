@@ -6,6 +6,7 @@ use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::{Window, utils::send_frames_surface_tree, space::SpaceElement},
+    output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Clock, Monotonic},
     wayland::{
@@ -25,7 +26,7 @@ use smithay::{
         shm::{ShmHandler, ShmState},
     },
     reexports::wayland_server::{
-        protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
+        protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         Client,
     },
     utils::Serial,
@@ -33,6 +34,7 @@ use smithay::{
 
 use crate::State;
 use self::handlers::ClientState;
+use tracing::debug;
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -63,7 +65,19 @@ impl CompositorHandler for State {
                 if let Some(output) = self.outputs.first() {
                     tracing::info!("Mapping pending window to output {} (geometry: {:?})", 
                                   output.name(), window.geometry());
-                    self.shell.write().unwrap().add_window(window.clone(), output);
+                    
+                    // check if window should be fullscreen
+                    let is_fullscreen = toplevel.with_pending_state(|state| {
+                        state.states.contains(xdg_toplevel::State::Fullscreen)
+                    });
+                    
+                    let mut shell = self.shell.write().unwrap();
+                    shell.add_window(window.clone(), output);
+                    
+                    if is_fullscreen {
+                        tracing::debug!("Window is fullscreen, updating shell state");
+                        shell.set_fullscreen(window.clone(), true);
+                    }
                     
                     // send initial frame callback
                     let clock = Clock::<Monotonic>::new();
@@ -152,14 +166,29 @@ impl XdgShellHandler for State {
         tracing::info!("New toplevel surface requested");
         let window = Window::new_wayland_window(surface.clone());
         
-        // send initial configure with size and activated state
-        // tell the window it's activated and suggest a size
-        surface.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Activated);
-            state.size = Some((800, 600).into());
+        // check if fullscreen was already requested (e.g., foot -F)
+        let is_fullscreen = surface.with_pending_state(|state| {
+            state.states.contains(xdg_toplevel::State::Fullscreen)
         });
+        
+        if is_fullscreen {
+            tracing::debug!("Window requested fullscreen before mapping");
+            // fullscreen state already set by fullscreen_request
+            // just need to set activated
+            surface.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Activated);
+                // size should already be set by fullscreen_request
+            });
+        } else {
+            // normal window - send initial configure with size and activated state
+            surface.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Activated);
+                state.size = Some((800, 600).into());
+            });
+        }
+        
         surface.send_configure();
-        tracing::debug!("Sent initial configure to toplevel (800x600, activated)");
+        tracing::debug!("Sent initial configure to toplevel (fullscreen: {})", is_fullscreen);
         
         // store as pending window - will be mapped after first commit with buffer
         self.pending_windows.push((surface, window));
@@ -176,6 +205,77 @@ impl XdgShellHandler for State {
     
     fn resize_request(&mut self, _surface: ToplevelSurface, _seat: WlSeat, _serial: Serial, _edges: xdg_toplevel::ResizeEdge) {
         // we'll handle resize requests later
+    }
+    
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, wl_output: Option<WlOutput>) {
+        // handle fullscreen state change - fullscreen_request always means go fullscreen
+        debug!("fullscreen_request called with output: {:?}", wl_output.is_some());
+        let mut shell = self.shell.write().unwrap();
+        
+        // find output first - we'll need it either way
+        let output = wl_output
+            .as_ref()
+            .and_then(Output::from_resource)
+            .or_else(|| {
+                // fallback to the output containing this surface or just the first one
+                shell.visible_output_for_surface(surface.wl_surface()).cloned()
+            })
+            .or_else(|| shell.space.outputs().next().cloned());
+        
+        if let Some(output) = output {
+            debug!("Will set fullscreen on output: {}", output.name());
+            
+            // always configure the surface state for fullscreen, even if window not yet mapped
+            surface.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Fullscreen);
+                state.fullscreen_output = wl_output;
+                // set fullscreen size to output size
+                let mode = output.current_mode().unwrap();
+                // convert physical size to logical
+                let scale = output.current_scale().fractional_scale();
+                let logical_size = mode.size.to_f64().to_logical(scale).to_i32_round();
+                debug!("Fullscreen size will be: {:?}", logical_size);
+                state.size = Some(logical_size);
+            });
+            surface.send_configure();
+            
+            // now try to find the window to update shell state
+            debug!("Searching for window among {} elements", shell.space.elements().count());
+            let window = shell.space.elements().find(|w| {
+                w.toplevel().unwrap() == &surface
+            }).cloned();
+            
+            if let Some(window) = window {
+                debug!("Found window, updating shell fullscreen state");
+                shell.set_fullscreen(window, true);
+            } else {
+                debug!("Window not yet mapped - fullscreen state will be applied when window is created");
+                // the window will pick up the fullscreen state when it's created
+            }
+        } else {
+            debug!("No output found for fullscreen request");
+        }
+    }
+    
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        // handle unfullscreen
+        let mut shell = self.shell.write().unwrap();
+        
+        // find the window - clone to avoid borrow issues
+        let window = shell.space.elements().find(|w| {
+            w.toplevel().unwrap() == &surface
+        }).cloned();
+        
+        if let Some(window) = window {
+            surface.with_pending_state(|state| {
+                state.states.unset(xdg_toplevel::State::Fullscreen);
+                state.fullscreen_output = None;
+                state.size = Some((800, 600).into()); // restore default size
+            });
+            surface.send_configure();
+            
+            shell.set_fullscreen(window, false);
+        }
     }
     
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
