@@ -156,7 +156,6 @@ pub type CursorState = Mutex<CursorStateInner>;
 
 pub struct CursorStateInner {
     pub current_cursor: Option<CursorIcon>,
-    pub current_position: Point<f64, Logical>,
     
     cursor_theme: CursorTheme,
     cursor_size: u32,
@@ -167,14 +166,6 @@ pub struct CursorStateInner {
 }
 
 impl CursorStateInner {
-    pub fn set_shape(&mut self, shape: CursorIcon) {
-        self.current_cursor = Some(shape);
-    }
-
-    pub fn unset_shape(&mut self) {
-        self.current_cursor = None;
-    }
-
     pub fn get_named_cursor(&mut self, shape: CursorIcon) -> &Cursor {
         self.cursors
             .entry(shape)
@@ -183,10 +174,6 @@ impl CursorStateInner {
 
     pub fn size(&self) -> u32 {
         self.cursor_size
-    }
-    
-    pub fn set_position(&mut self, position: Point<f64, Logical>) {
-        self.current_position = position;
     }
 }
 
@@ -211,7 +198,6 @@ impl Default for CursorStateInner {
         let (theme, size) = load_cursor_theme();
         CursorStateInner {
             current_cursor: Some(CursorIcon::Default),
-            current_position: Point::from((0.0, 0.0)),
             
             cursor_size: size,
             cursor_theme: theme,

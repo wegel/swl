@@ -50,11 +50,14 @@ pub struct State {
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
     pub data_device_state: DataDeviceState,
+    #[allow(dead_code)] // will be used for output configuration protocol
     pub output_manager_state: OutputManagerState,
+    #[allow(dead_code)] // used by presentation feedback protocol
     pub presentation_state: PresentationState,
     pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
     pub pending_windows: Vec<(ToplevelSurface, Window)>,
+    #[allow(dead_code)] // will be used for server-side cursor rendering
     pub cursor_state: CursorState,
     session_active: bool,
 }

@@ -186,12 +186,16 @@ impl PostprocessState {
 }
 
 /// Plane assignment for hardware composition
+// will be used in Phase 4i: Hardware Plane Optimization
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct PlaneAssignment {
     pub element_index: usize,
     pub plane_type: PlaneType,
 }
 
+// will be used in Phase 4i: Hardware Plane Optimization
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum PlaneType {
     Primary,
@@ -386,6 +390,8 @@ impl Surface {
     }
     
     /// Check if adaptive sync (VRR) is supported on this output
+    // currently unused but may be exposed to clients in the future
+    #[allow(dead_code)]
     pub fn adaptive_sync_support(&self) -> Result<Option<VrrSupport>> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let _ = self
@@ -395,6 +401,8 @@ impl Surface {
     }
     
     /// Set adaptive sync mode for this surface
+    // currently unused but may be exposed for runtime VRR mode changes
+    #[allow(dead_code)]
     pub fn use_adaptive_sync(&mut self, vrr: AdaptiveSync) {
         let _ = self
             .thread_command
@@ -731,6 +739,8 @@ impl SurfaceThreadState {
     }
     
     /// Phase 5c: Check if elements can use hardware planes
+    // will be used in Phase 4i: Hardware Plane Optimization
+    #[allow(dead_code)]
     fn assign_planes(&self, _elements: &[CosmicElement<GlMultiRenderer>]) -> Vec<PlaneAssignment> {
         // Phase 5c: Hardware plane support
         // TODO: Query available planes and assign elements to them
@@ -739,6 +749,8 @@ impl SurfaceThreadState {
     }
     
     /// Phase 5e: Check if we can do direct scanout (fullscreen bypass)
+    // will be used in Phase 4i: Hardware Plane Optimization
+    #[allow(dead_code)]
     fn can_direct_scanout(&self, _elements: &[CosmicElement<GlMultiRenderer>]) -> bool {
         // Phase 5e: Direct scanout for fullscreen content
         // TODO: Check if single fullscreen element with compatible buffer
@@ -746,6 +758,8 @@ impl SurfaceThreadState {
     }
     
     /// Phase 4h: Check and enable VRR if supported
+    // will be used for dynamic VRR updates
+    #[allow(dead_code)]
     fn update_vrr(&mut self, enable: bool) {
         if let Some(compositor) = self.compositor.as_mut() {
             // try to enable/disable VRR

@@ -110,6 +110,8 @@ impl Shell {
     }
     
     /// Remove a window from the shell
+    // will be used when handling window close events
+    #[allow(dead_code)]
     pub fn remove_window(&mut self, window: &Window) {
         // find and remove from our tracking
         let mut id_to_remove = None;
@@ -143,7 +145,7 @@ impl Shell {
             // get the window's bounding box (includes decorations)
             let bbox = window.bbox();
             // translate bbox to global coordinates
-            let global_bbox = Rectangle::from_loc_and_size(
+            let global_bbox = Rectangle::new(
                 location + bbox.loc,
                 bbox.size,
             );
@@ -172,7 +174,7 @@ impl Shell {
             // get the window's bounding box (includes decorations)
             let bbox = window.bbox();
             // translate bbox to global coordinates
-            let global_bbox = Rectangle::from_loc_and_size(
+            let global_bbox = Rectangle::new(
                 location + bbox.loc,
                 bbox.size,
             );
