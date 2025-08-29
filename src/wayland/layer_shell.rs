@@ -59,7 +59,7 @@ impl WlrLayerShellHandler for State {
     }
     
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-        debug!("Layer surface destroyed");
+        info!("Layer surface destroyed - START");
         
         // find which output has this layer surface
         let maybe_output = self.outputs.iter().find(|o| {
@@ -69,17 +69,24 @@ impl WlrLayerShellHandler for State {
         }).cloned();
         
         if let Some(output) = maybe_output {
+            info!("Found output for layer surface");
             // unmap the layer
             let mut map = layer_map_for_output(&output);
             if let Some(layer) = map.layer_for_surface(surface.wl_surface(), WindowSurfaceType::TOPLEVEL) {
                 let layer = layer.clone();
                 map.unmap_layer(&layer);
-                debug!("Layer surface unmapped from output {}", output.name());
+                info!("Layer surface unmapped from output {}", output.name());
             }
             
             // schedule render for the output
             self.backend.schedule_render(&output);
+            
+            // mark that we need to refresh focus (will happen in main loop)
+            self.needs_focus_refresh = true;
+            info!("Marked for focus refresh");
         }
+        
+        info!("Layer surface destroyed - END");
     }
     
     fn new_popup(&mut self, _parent: WlrLayerSurface, popup: PopupSurface) {

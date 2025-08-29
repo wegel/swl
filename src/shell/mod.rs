@@ -17,7 +17,7 @@ use smithay::{
     input::pointer::CursorImageStatus,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     output::Output,
-    utils::{Logical, Point, Rectangle, Scale, Size},
+    utils::{IsAlive, Logical, Point, Rectangle, Scale, Size},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -116,15 +116,12 @@ impl Shell {
         tracing::info!("Output mode: {:?}, Output size: {:?}", output_mode, output_size);
         tracing::info!("Window geometry: {:?}, Window size: {:?}", window_geometry, window_size);
         
-        // add to focus stack
-        self.focus_stack.push(window.clone());
-        
         // map window to a temporary location first, then arrange
         self.space.map_element(window.clone(), Point::from((0, 0)), false);
         self.arrange();
         
-        // set as focused
-        self.focused_window = Some(window.clone());
+        // add to focus stack and set as focused
+        self.append_focus(window.clone());
         tracing::debug!("Set window {} as focused", id);
         
         tracing::info!("Window {} added successfully. Total windows: {}", id, self.windows.len());
@@ -506,11 +503,13 @@ impl Shell {
         if let Some(focused) = &self.focused_window {
             if let Some(pos) = self.focus_stack.iter().position(|w| w == focused) {
                 let next_pos = (pos + 1) % self.focus_stack.len();
-                self.focused_window = Some(self.focus_stack[next_pos].clone());
+                let next_window = self.focus_stack[next_pos].clone();
+                self.append_focus(next_window);
                 tracing::debug!("Focused next window");
             }
         } else if !self.focus_stack.is_empty() {
-            self.focused_window = Some(self.focus_stack[0].clone());
+            let first_window = self.focus_stack[0].clone();
+            self.append_focus(first_window);
         }
     }
     
@@ -523,11 +522,13 @@ impl Shell {
         if let Some(focused) = &self.focused_window {
             if let Some(pos) = self.focus_stack.iter().position(|w| w == focused) {
                 let prev_pos = if pos == 0 { self.focus_stack.len() - 1 } else { pos - 1 };
-                self.focused_window = Some(self.focus_stack[prev_pos].clone());
+                let prev_window = self.focus_stack[prev_pos].clone();
+                self.append_focus(prev_window);
                 tracing::debug!("Focused previous window");
             }
         } else if !self.focus_stack.is_empty() {
-            self.focused_window = Some(self.focus_stack[self.focus_stack.len() - 1].clone());
+            let last_window = self.focus_stack[self.focus_stack.len() - 1].clone();
+            self.append_focus(last_window);
         }
     }
     
@@ -541,5 +542,42 @@ impl Shell {
         } else {
             tracing::warn!("No focused window to close");
         }
+    }
+    
+    /// Refresh focus to the topmost window in the focus stack
+    /// Called when layer surfaces are destroyed or focus needs updating
+    pub fn refresh_focus(&mut self) -> Option<Window> {
+        // find the last alive window in the focus stack
+        let focused = self.focus_stack.iter()
+            .rev()
+            .find(|w| w.alive())
+            .cloned();
+        
+        self.focused_window = focused.clone();
+        
+        if focused.is_some() {
+            tracing::debug!("Refreshed focus to window from focus stack");
+        } else {
+            tracing::debug!("No alive window in focus stack to focus");
+        }
+        
+        focused
+    }
+    
+    /// Update the focus stack when a window receives focus
+    pub fn append_focus(&mut self, window: Window) {
+        // remove dead windows from the stack
+        self.focus_stack.retain(|w| w.alive());
+        
+        // remove the window if it's already in the stack
+        if let Some(pos) = self.focus_stack.iter().position(|w| w == &window) {
+            self.focus_stack.remove(pos);
+        }
+        
+        // add it to the end (most recently focused)
+        self.focus_stack.push(window.clone());
+        self.focused_window = Some(window);
+        
+        tracing::trace!("Focus stack updated, {} windows tracked", self.focus_stack.len());
     }
 }

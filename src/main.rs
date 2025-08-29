@@ -65,6 +65,12 @@ fn main_inner() -> Result<()> {
 
         // send out pending events
         let _ = state.display_handle.flush_clients();
+        
+        // refresh focus if needed (deferred from layer_destroyed and other events)
+        if state.needs_focus_refresh {
+            state.needs_focus_refresh = false;
+            state.refresh_focus();
+        }
     })?;
 
     info!("Event loop exited");

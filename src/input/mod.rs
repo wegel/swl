@@ -195,8 +195,8 @@ impl State {
                     };
                     
                     if let Some(window) = window_to_focus {
-                        // update focused window in shell
-                        self.shell.write().unwrap().focused_window = Some(window.clone());
+                        // update focus stack and focused window
+                        self.shell.write().unwrap().append_focus(window.clone());
                         
                         // set keyboard focus
                         if let Some(surface) = window.toplevel().and_then(|t| Some(t.wl_surface().clone())) {

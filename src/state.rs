@@ -66,6 +66,7 @@ pub struct State {
     #[allow(dead_code)] // will be used for server-side cursor rendering
     pub cursor_state: CursorState,
     session_active: bool,
+    pub needs_focus_refresh: bool,
 }
 
 // suppress warnings for now - we'll use these soon
@@ -145,6 +146,7 @@ impl State {
             pending_windows: Vec::new(),
             cursor_state: Mutex::new(CursorStateInner::default()),
             session_active: false,
+            needs_focus_refresh: false,
         }
     }
     
@@ -162,6 +164,44 @@ impl State {
             if let BackendData::Kms(kms) = &self.backend {
                 kms.libinput.suspend();
             }
+        }
+    }
+    
+    /// Refresh focus to the topmost window in the focus stack
+    /// This is called from the main event loop when needs_focus_refresh is set
+    pub fn refresh_focus(&mut self) {
+        use smithay::utils::IsAlive;
+        
+        // get current keyboard focus
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let current_focus = keyboard.current_focus();
+        
+        // check if current focus is still valid
+        if let Some(ref target) = current_focus {
+            if target.alive() {
+                // focus is still valid, nothing to do
+                return;
+            }
+        }
+        
+        // current focus is invalid or none, restore from focus stack
+        let window = self.shell.write().unwrap().refresh_focus();
+        
+        if let Some(window) = window {
+            // restore keyboard focus to the window's surface
+            let surface = window.toplevel().unwrap().wl_surface().clone();
+            keyboard.set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+            
+            // also update pointer focus if needed
+            if let Some(output) = self.outputs.first() {
+                self.backend.schedule_render(output);
+            }
+            
+            tracing::info!("Focus restored to window");
+        } else {
+            // no window to focus, clear keyboard focus
+            keyboard.set_focus(self, None, smithay::utils::SERIAL_COUNTER.next_serial());
+            tracing::info!("No window to restore focus to, cleared focus");
         }
     }
     

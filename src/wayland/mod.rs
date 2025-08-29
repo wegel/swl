@@ -245,11 +245,13 @@ impl XdgShellHandler for State {
     
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         // find and remove the window from our shell
-        let output = {
+        let (output, was_focused) = {
             let mut shell = self.shell.write().unwrap();
             
             // find which output the window is on
             let output = self.outputs.first().cloned();
+            
+            let mut was_focused = false;
             
             // remove from space
             if let Some(window) = shell.windows.values().find(|w| {
@@ -272,12 +274,10 @@ impl XdgShellHandler for State {
                     w.toplevel().map_or(true, |t| t != &surface)
                 });
                 
-                // update focused window if it was destroyed
-                if shell.focused_window.as_ref().map_or(false, |w| {
+                // check if focused window was destroyed
+                was_focused = shell.focused_window.as_ref().map_or(false, |w| {
                     w.toplevel().map_or(false, |t| t == &surface)
-                }) {
-                    shell.focused_window = shell.focus_stack.first().cloned();
-                }
+                });
                 
                 // update fullscreen window if it was destroyed
                 if shell.fullscreen_window.as_ref().map_or(false, |w| {
@@ -291,24 +291,13 @@ impl XdgShellHandler for State {
                 shell.arrange();
             }
             
-            output
+            (output, was_focused)
         };
         
-        // update keyboard focus if needed
-        let new_focus_surface = {
-            let shell = self.shell.read().unwrap();
-            shell.focused_window.as_ref()
-                .and_then(|w| w.toplevel())
-                .map(|t| t.wl_surface().clone())
-        };
-        
-        let keyboard = self.seat.get_keyboard().unwrap();
-        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        
-        if let Some(surface) = new_focus_surface {
-            keyboard.set_focus(self, Some(surface), serial);
-        } else {
-            keyboard.set_focus(self, None, serial);
+        // if the destroyed window was focused, mark for focus refresh
+        if was_focused {
+            self.needs_focus_refresh = true;
+            tracing::debug!("Focused window destroyed, marked for focus refresh");
         }
         
         // schedule render for the output
