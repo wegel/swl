@@ -18,6 +18,7 @@ use smithay::{
     wayland::{
         compositor::CompositorState,
         output::OutputManagerState,
+        presentation::PresentationState,
         selection::data_device::DataDeviceState,
         shell::xdg::{XdgShellState, ToplevelSurface},
         shm::ShmState,
@@ -50,6 +51,7 @@ pub struct State {
     pub shm_state: ShmState,
     pub data_device_state: DataDeviceState,
     pub output_manager_state: OutputManagerState,
+    pub presentation_state: PresentationState,
     pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
     pub pending_windows: Vec<(ToplevelSurface, Window)>,
@@ -106,6 +108,10 @@ impl State {
         // create the shell
         let shell = Arc::new(RwLock::new(Shell::new()));
         
+        // create presentation state
+        // using CLOCK_MONOTONIC (id = 1) as the clock
+        let presentation_state = PresentationState::new::<State>(&display_handle, 1);
+        
         Self {
             display_handle: display_handle.clone(),
             loop_handle,
@@ -120,6 +126,7 @@ impl State {
             shm_state,
             data_device_state,
             output_manager_state,
+            presentation_state,
             shell,
             outputs: Vec::new(),
             pending_windows: Vec::new(),

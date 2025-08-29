@@ -4,7 +4,7 @@ pub mod handlers;
 
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::{Window, utils::send_frames_surface_tree, space::SpaceElement},
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Clock, Monotonic},
@@ -194,5 +194,6 @@ delegate_output!(State);
 delegate_shm!(State);
 delegate_seat!(State);
 delegate_xdg_shell!(State);
+delegate_presentation!(State);
 
 // we already implement SeatHandler in input/mod.rs

@@ -5,7 +5,6 @@ use smithay::{
         element::{
             surface::WaylandSurfaceRenderElement,
             texture::TextureRenderElement,
-            memory::MemoryRenderBufferRenderElement,
             Element, Id, Kind, RenderElement, UnderlyingStorage,
         },
         gles::{GlesError, GlesTexture},
@@ -317,7 +316,7 @@ where
         }
     }
     
-    fn underlying_storage(&self, renderer: &mut R) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         match self {
             CosmicElement::Surface(elem) => elem.underlying_storage(renderer),
             CosmicElement::Damage(_) => None,  // DamageElement has no underlying storage

@@ -19,6 +19,7 @@ use smithay::{
         },
         session::Session,
     },
+    desktop::utils::OutputPresentationFeedback,
     output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{LoopHandle, RegistrationToken},
@@ -47,21 +48,21 @@ pub struct EGLInternals {
     pub context: EGLContext,
 }
 
+/// Type alias for our DRM output manager with presentation feedback support
+pub type GbmDrmOutputManager = DrmOutputManager<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    Option<OutputPresentationFeedback>,
+    DrmDeviceFd,
+>;
+
 /// Type alias for our locked DRM output manager
 #[allow(dead_code)] // will be used for output management
 pub type LockedGbmDrmOutputManager<'a> = LockedDrmOutputManager<
     'a,
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
-    (),  // simplified - no presentation feedback yet
-    DrmDeviceFd,
->;
-
-/// Type alias for our DRM output manager
-pub type GbmDrmOutputManager = DrmOutputManager<
-    GbmAllocator<DrmDeviceFd>,
-    GbmFramebufferExporter<DrmDeviceFd>,
-    (),  // simplified - no presentation feedback yet
+    Option<OutputPresentationFeedback>,
     DrmDeviceFd,
 >;
 

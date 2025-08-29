@@ -2,10 +2,16 @@
 
 use smithay::{
     backend::renderer::{
-        element::AsRenderElements,
+        element::{AsRenderElements, RenderElementStates},
         ImportAll, ImportMem, Renderer,
     },
-    desktop::{Space, Window},
+    desktop::{
+        utils::{
+            surface_presentation_feedback_flags_from_states,
+            OutputPresentationFeedback,
+        },
+        Space, Window,
+    },
     input::pointer::CursorImageStatus,
     output::Output,
     utils::{Logical, Point, Scale},
@@ -168,6 +174,50 @@ impl Shell {
         // we don't have compositor-side animations yet (window movement, fading, etc)
         // client animations are handled through proper frame callbacks in the backend
         false
+    }
+    
+    /// Collect presentation feedback for all surfaces on the given output
+    pub fn take_presentation_feedback(
+        &self,
+        output: &Output,
+        render_element_states: &RenderElementStates,
+    ) -> OutputPresentationFeedback {
+        let mut output_presentation_feedback = OutputPresentationFeedback::new(output);
+        
+        // collect feedback from all windows on this output
+        for window in self.space.elements() {
+            // check if window is on this output
+            if let Some(window_location) = self.space.element_location(window) {
+                let output_geometry = self.space.output_geometry(output).unwrap();
+                let window_geometry = smithay::utils::Rectangle::from_extremities(
+                    window_location,
+                    window_location + window.geometry().size,
+                );
+                
+                if output_geometry.overlaps(window_geometry) {
+                    // collect feedback for this window's surface tree
+                    window.take_presentation_feedback(
+                        &mut output_presentation_feedback,
+                        |_surface, _states| {
+                            // For now, always return the current output since we're single-GPU
+                            // TODO: properly track primary scanout output when we add multi-GPU support
+                            Some(output.clone())
+                        },
+                        |surface, _| {
+                            surface_presentation_feedback_flags_from_states(
+                                surface,
+                                render_element_states,
+                            )
+                        },
+                    );
+                }
+            }
+        }
+        
+        // TODO: handle layer shell surfaces when we add them
+        // TODO: handle override redirect windows when we add them
+        
+        output_presentation_feedback
     }
     
     /// Get the output at the given position

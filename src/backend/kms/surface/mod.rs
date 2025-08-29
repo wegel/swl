@@ -29,6 +29,7 @@ use smithay::{
             Bind, Renderer, Offscreen, Texture,
         },
     },
+    desktop::utils::OutputPresentationFeedback,
     output::Output,
     reexports::{
         calloop::{
@@ -38,7 +39,7 @@ use smithay::{
         },
         drm::control::{connector, crtc},
     },
-    utils::{Clock, Monotonic, Point, Rectangle, Size, Transform},
+    utils::{Clock, Monotonic, Rectangle, Size, Transform},
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 
@@ -61,12 +62,12 @@ use std::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-/// Type alias for our DRM output - following cosmic-comp's definition
-/// Simplified version without presentation feedback for now
+/// Type alias for our DRM output
+/// Now properly configured with presentation feedback support
 pub type GbmDrmOutput = DrmOutput<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
-    (),  // simplified - no presentation feedback yet (cosmic-comp has complex feedback)
+    Option<OutputPresentationFeedback>,  // presentation feedback for frame timing
     DrmDeviceFd,
 >;
 
@@ -333,7 +334,6 @@ impl Surface {
     }
     
     /// Resume the surface with a compositor
-    #[allow(dead_code)] // will be used when we connect the render loop
     pub fn resume(&self, compositor: GbmDrmOutput) {
         info!("Resuming surface for output {}", self.output.name());
         self.active.store(true, Ordering::SeqCst);
@@ -785,13 +785,45 @@ impl SurfaceThreadState {
             _ => None,
         };
         
-        // mark last frame completed
-        if let Ok(Some(_userdata)) = compositor.frame_submitted() {
+        // mark last frame completed and send presentation feedback
+        if let Ok(Some(feedback)) = compositor.frame_submitted() {
             let clock = if let Some(tp) = presentation_time {
                 tp.into()  // convert Duration to Time<Monotonic>
             } else {
                 now
             };
+            
+            // send presentation feedback to clients if available
+            if let Some(mut feedback) = feedback {
+                // get refresh interval from output mode
+                use smithay::wayland::presentation::Refresh;
+                let refresh = self.output.current_mode()
+                    .map(|mode| {
+                        let duration = Duration::from_secs_f64(1.0 / mode.refresh as f64 * 1000.0);
+                        Refresh::Fixed(duration)
+                    })
+                    .unwrap_or(Refresh::Fixed(Duration::from_millis(16)));
+                
+                // get sequence number from metadata
+                // note: Often 0 if DRM driver doesn't provide frame counter
+                let sequence = metadata.as_ref()
+                    .map(|m| {
+                        debug!("VBlank metadata: sequence={}, time={:?}", m.sequence, m.time);
+                        m.sequence
+                    })
+                    .unwrap_or_else(|| {
+                        debug!("No VBlank metadata available");
+                        0
+                    }) as u64;
+                
+                // presentation flags - vsync, hardware completion
+                use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
+                let flags = wp_presentation_feedback::Kind::Vsync | 
+                           wp_presentation_feedback::Kind::HwCompletion;
+                
+                feedback.presented(clock, refresh, sequence, flags);
+            }
+            
             self.timings.presented(clock);
         }
         
@@ -909,7 +941,7 @@ impl SurfaceThreadState {
         let output_size = self.output.current_mode()
             .map(|m| Size::from((m.size.w as i32, m.size.h as i32)))
             .unwrap_or_default();
-        let output_rect = Rectangle::from_loc_and_size(output_loc, output_size);
+        let output_rect = Rectangle::new(output_loc, output_size);
         
         // for now, only render cursor on the output that contains the cursor hotspot
         // this avoids duplicate cursors when outputs overlap at the same position
@@ -990,9 +1022,19 @@ impl SurfaceThreadState {
             // mark submission time
             self.timings.submitted_for_presentation(&self.clock);
             
+            // collect presentation feedback if frame is not empty
+            let feedback = if !frame_result.is_empty {
+                Some(self.shell.read().unwrap().take_presentation_feedback(
+                    &self.output,
+                    &frame_result.states,
+                ))
+            } else {
+                None
+            };
+            
             // always try to queue the frame, even if empty
             // the compositor will return EmptyFrame error if there's no damage
-            match self.compositor.as_mut().unwrap().queue_frame(()) {
+            match self.compositor.as_mut().unwrap().queue_frame(feedback) {
                 Ok(()) => {
                     // successfully queued, we'll get a real VBlank
                     self.state = QueueState::WaitingForVBlank {
@@ -1126,9 +1168,19 @@ impl SurfaceThreadState {
         // mark submission time
         self.timings.submitted_for_presentation(&self.clock);
         
+        // collect presentation feedback if frame is not empty
+        let feedback = if !frame_result.is_empty {
+            Some(self.shell.read().unwrap().take_presentation_feedback(
+                &self.output,
+                &frame_result.states,
+            ))
+        } else {
+            None
+        };
+        
         // always try to queue the frame, even if empty
         // the compositor will return EmptyFrame error if there's no damage
-        match self.compositor.as_mut().unwrap().queue_frame(()) {
+        match self.compositor.as_mut().unwrap().queue_frame(feedback) {
             Ok(()) => {
                 // successfully queued, we'll get a real VBlank
                 self.state = QueueState::WaitingForVBlank {
