@@ -4,10 +4,11 @@ pub mod handlers;
 
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
-    delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_decoration,
     desktop::{Window, utils::send_frames_surface_tree, space::SpaceElement},
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
+    reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
     utils::{Clock, Monotonic},
     wayland::{
         buffer::BufferHandler,
@@ -20,6 +21,7 @@ use smithay::{
             SelectionHandler,
         },
         shell::xdg::{
+            decoration::XdgDecorationHandler,
             PopupSurface, PositionerState, ToplevelSurface,
             XdgShellHandler, XdgShellState,
         },
@@ -214,6 +216,79 @@ impl XdgShellHandler for State {
         // we'll handle resize requests later
     }
     
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        // find and remove the window from our shell
+        let output = {
+            let mut shell = self.shell.write().unwrap();
+            
+            // find which output the window is on
+            let output = self.outputs.first().cloned();
+            
+            // remove from space
+            if let Some(window) = shell.windows.values().find(|w| {
+                w.toplevel().map_or(false, |t| t == &surface)
+            }).cloned() {
+                shell.space.unmap_elem(&window);
+                
+                // remove from our tracking
+                shell.windows.retain(|_id, w| {
+                    w.toplevel().map_or(true, |t| t != &surface)
+                });
+                
+                // remove from focus stack
+                shell.focus_stack.retain(|w| {
+                    w.toplevel().map_or(true, |t| t != &surface)
+                });
+                
+                // remove from floating windows
+                shell.floating_windows.retain(|w| {
+                    w.toplevel().map_or(true, |t| t != &surface)
+                });
+                
+                // update focused window if it was destroyed
+                if shell.focused_window.as_ref().map_or(false, |w| {
+                    w.toplevel().map_or(false, |t| t == &surface)
+                }) {
+                    shell.focused_window = shell.focus_stack.first().cloned();
+                }
+                
+                // update fullscreen window if it was destroyed
+                if shell.fullscreen_window.as_ref().map_or(false, |w| {
+                    w.toplevel().map_or(false, |t| t == &surface)
+                }) {
+                    shell.fullscreen_window = None;
+                }
+                
+                // re-arrange remaining windows
+                shell.arrange();
+            }
+            
+            output
+        };
+        
+        // update keyboard focus if needed
+        let new_focus_surface = {
+            let shell = self.shell.read().unwrap();
+            shell.focused_window.as_ref()
+                .and_then(|w| w.toplevel())
+                .map(|t| t.wl_surface().clone())
+        };
+        
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        
+        if let Some(surface) = new_focus_surface {
+            keyboard.set_focus(self, Some(surface), serial);
+        } else {
+            keyboard.set_focus(self, None, serial);
+        }
+        
+        // schedule render for the output
+        if let Some(output) = output {
+            self.backend.schedule_render(&output);
+        }
+    }
+    
     fn fullscreen_request(&mut self, surface: ToplevelSurface, wl_output: Option<WlOutput>) {
         // handle fullscreen state change - fullscreen_request always means go fullscreen
         debug!("fullscreen_request called with output: {:?}", wl_output.is_some());
@@ -295,7 +370,29 @@ impl XdgShellHandler for State {
 }
 
 // delegate protocol handling to smithay
+impl XdgDecorationHandler for State {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        // always use server-side decorations (no client decorations)
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(Mode::ServerSide);
+        });
+        
+        if toplevel.is_initial_configure_sent() {
+            toplevel.send_configure();
+        }
+    }
+    
+    fn request_mode(&mut self, _toplevel: ToplevelSurface, _mode: Mode) {
+        // ignore client requests - we control decoration mode
+    }
+    
+    fn unset_mode(&mut self, _toplevel: ToplevelSurface) {
+        // ignore unset requests
+    }
+}
+
 delegate_compositor!(State);
+delegate_xdg_decoration!(State);
 delegate_data_device!(State);
 delegate_output!(State);
 delegate_shm!(State);

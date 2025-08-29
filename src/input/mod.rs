@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod keybindings;
+
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, ButtonState, Device, DeviceCapability, InputBackend, InputEvent, 
@@ -15,8 +17,10 @@ use smithay::{
     utils::{Point, SERIAL_COUNTER},
 };
 use tracing::{debug, info, trace};
+use std::process::Command;
 
 use crate::State;
+use self::keybindings::{Keybindings, Action};
 
 impl State {
     /// Process input events from the backend
@@ -58,24 +62,32 @@ impl State {
                     let keyboard = seat.get_keyboard().unwrap();
                     
                     // process the key input
+                    // check for keybindings
+                    let keybindings = Keybindings::new();
+                    
                     keyboard.input(
                         self,
                         keycode,
                         state,
                         serial,
                         time,
-                        |_, modifiers, keysym| {
+                        |state, modifiers, keysym| {
                             debug!(
                                 "Key press: keycode={:?}, keysym={:?}, modifiers={:?}, state={:?}",
                                 keycode,
                                 keysym.modified_sym(),
                                 modifiers,
-                                state
+                                event.state()
                             );
                             
-                            // for now, just forward all keys
-                            // later we'll add keybindings here
-                            FilterResult::<()>::Forward
+                            // check if this is a keybinding
+                            if let Some(action) = keybindings.check(modifiers, keysym.modified_sym(), event.state()) {
+                                state.handle_action(action);
+                                FilterResult::Intercept(())
+                            } else {
+                                // forward to client
+                                FilterResult::Forward
+                            }
                         },
                     );
                 }
@@ -256,6 +268,115 @@ impl State {
             _ => {
                 // ignore other events for now
                 trace!("Unhandled input event");
+            }
+        }
+    }
+    
+    /// Handle a keybinding action
+    fn handle_action(&mut self, action: Action) {
+        use Action::*;
+        
+        match action {
+            // window management
+            FocusNext => {
+                let surface = {
+                    let mut shell = self.shell.write().unwrap();
+                    shell.focus_next();
+                    // get surface to focus
+                    shell.focused_window.as_ref()
+                        .and_then(|w| w.toplevel())
+                        .map(|t| t.wl_surface().clone())
+                };
+                // update keyboard focus
+                if let Some(surface) = surface {
+                    let keyboard = self.seat.get_keyboard().unwrap();
+                    let serial = SERIAL_COUNTER.next_serial();
+                    keyboard.set_focus(self, Some(surface), serial);
+                }
+            }
+            FocusPrev => {
+                let surface = {
+                    let mut shell = self.shell.write().unwrap();
+                    shell.focus_prev();
+                    // get surface to focus
+                    shell.focused_window.as_ref()
+                        .and_then(|w| w.toplevel())
+                        .map(|t| t.wl_surface().clone())
+                };
+                // update keyboard focus
+                if let Some(surface) = surface {
+                    let keyboard = self.seat.get_keyboard().unwrap();
+                    let serial = SERIAL_COUNTER.next_serial();
+                    keyboard.set_focus(self, Some(surface), serial);
+                }
+            }
+            Zoom => {
+                let mut shell = self.shell.write().unwrap();
+                shell.zoom();
+            }
+            CloseWindow => {
+                let mut shell = self.shell.write().unwrap();
+                shell.close_focused();
+            }
+            ToggleFloating => {
+                let mut shell = self.shell.write().unwrap();
+                if let Some(window) = shell.focused_window.clone() {
+                    shell.toggle_floating(&window);
+                }
+            }
+            
+            // layout control
+            IncreaseMasterWidth => {
+                {
+                    let mut shell = self.shell.write().unwrap();
+                    shell.tiling.set_master_factor(0.05);
+                    shell.arrange();
+                }
+            }
+            DecreaseMasterWidth => {
+                {
+                    let mut shell = self.shell.write().unwrap();
+                    shell.tiling.set_master_factor(-0.05);
+                    shell.arrange();
+                }
+            }
+            IncreaseMasterCount => {
+                {
+                    let mut shell = self.shell.write().unwrap();
+                    shell.tiling.inc_n_master(1);
+                    shell.arrange();
+                }
+            }
+            DecreaseMasterCount => {
+                {
+                    let mut shell = self.shell.write().unwrap();
+                    shell.tiling.inc_n_master(-1);
+                    shell.arrange();
+                }
+            }
+            
+            // applications
+            LaunchTerminal => {
+                info!("Launching terminal");
+                if let Err(e) = Command::new("foot").spawn() {
+                    tracing::error!("Failed to launch terminal: {}", e);
+                }
+            }
+            LaunchMenu => {
+                info!("Launching menu");
+                // try common menu programs
+                if Command::new("rofi").arg("-show").arg("drun").spawn().is_err() {
+                    if Command::new("dmenu_run").spawn().is_err() {
+                        tracing::warn!("No menu program found (tried rofi, dmenu_run)");
+                    }
+                }
+            }
+            
+            // system
+            Quit => {
+                info!("Quit requested via keybinding");
+                self.loop_signal.stop();
+                self.should_stop = true;
             }
         }
     }

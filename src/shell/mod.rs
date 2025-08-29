@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+pub mod tiling;
+
 use smithay::{
     backend::renderer::{
         element::{AsRenderElements, RenderElementStates},
@@ -15,11 +17,12 @@ use smithay::{
     input::pointer::CursorImageStatus,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     output::Output,
-    utils::{Logical, Point, Rectangle, Scale},
+    utils::{Logical, Point, Rectangle, Scale, Size},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::backend::render::element::{AsGlowRenderer, CosmicElement};
+use self::tiling::TilingLayout;
 
 /// A simple shell for managing windows
 pub struct Shell {
@@ -43,6 +46,15 @@ pub struct Shell {
     
     /// Cursor image status
     pub cursor_status: CursorImageStatus,
+    
+    /// Tiling layout manager
+    pub tiling: TilingLayout,
+    
+    /// Windows that are floating (exempt from tiling)
+    pub floating_windows: HashSet<Window>,
+    
+    /// Ordered list of windows for focus cycling
+    pub focus_stack: Vec<Window>,
 }
 
 impl Shell {
@@ -56,6 +68,9 @@ impl Shell {
             // start cursor off-screen to avoid rendering on all outputs at startup
             cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
+            tiling: TilingLayout::new((1920, 1080).into()), // default size, will be updated
+            floating_windows: HashSet::new(),
+            focus_stack: Vec::new(),
         }
     }
     
@@ -63,6 +78,18 @@ impl Shell {
     pub fn add_output(&mut self, output: &Output) {
         // map the output at origin (we don't support multi-monitor positioning yet)
         self.space.map_output(output, Point::from((0, 0)));
+        
+        // update tiling layout with output size
+        if let Some(mode) = output.current_mode() {
+            // convert physical size to logical
+            let scale = output.current_scale().fractional_scale();
+            let logical_size = Size::from((
+                (mode.size.w as f64 / scale) as i32,
+                (mode.size.h as f64 / scale) as i32,
+            ));
+            self.tiling.set_output_size(logical_size);
+        }
+        
         tracing::info!("Added output {} to shell space", output.name());
     }
     
@@ -85,54 +112,18 @@ impl Shell {
         tracing::info!("Output mode: {:?}, Output size: {:?}", output_mode, output_size);
         tracing::info!("Window geometry: {:?}, Window size: {:?}", window_geometry, window_size);
         
-        // center the window on the output for now (no tiling yet)
-        // if window has no size yet (0x0), use a default position
-        let location = if window_size.w > 0 && window_size.h > 0 {
-            let x = (output_size.w - window_size.w) / 2;
-            let y = (output_size.h - window_size.h) / 2;
-            Point::from((x, y))
-        } else {
-            // window has no size yet, position at top-left and it will be repositioned later
-            tracing::warn!("Window has 0x0 size, using default position");
-            Point::from((0, 0))
-        };
+        // add to focus stack
+        self.focus_stack.push(window.clone());
         
-        tracing::info!("Mapping window {} to space at location {:?}", id, location);
-        self.space.map_element(window.clone(), location, false);
+        // map window to a temporary location first, then arrange
+        self.space.map_element(window.clone(), Point::from((0, 0)), false);
+        self.arrange();
         
-        // set as focused if no window is focused
-        if self.focused_window.is_none() {
-            self.focused_window = Some(window.clone());
-            tracing::debug!("Set window {} as focused", id);
-        }
+        // set as focused
+        self.focused_window = Some(window.clone());
+        tracing::debug!("Set window {} as focused", id);
         
         tracing::info!("Window {} added successfully. Total windows: {}", id, self.windows.len());
-    }
-    
-    /// Remove a window from the shell
-    // will be used when handling window close events
-    #[allow(dead_code)]
-    pub fn remove_window(&mut self, window: &Window) {
-        // find and remove from our tracking
-        let mut id_to_remove = None;
-        for (id, w) in &self.windows {
-            if w == window {
-                id_to_remove = Some(*id);
-                break;
-            }
-        }
-        
-        if let Some(id) = id_to_remove {
-            self.windows.remove(&id);
-        }
-        
-        // unmap from space
-        self.space.unmap_elem(window);
-        
-        // update focus if this was the focused window
-        if self.focused_window.as_ref() == Some(window) {
-            self.focused_window = self.windows.values().next().cloned();
-        }
     }
     
     /// Get the window under the given point
@@ -344,5 +335,155 @@ impl Shell {
         
         tracing::debug!("Total render elements: {}", elements.len());
         elements
+    }
+    
+    /// Arrange windows according to the current tiling layout
+    pub fn arrange(&mut self) {
+        tracing::info!("arrange() called");
+        
+        // collect windows to tile (non-floating, non-fullscreen)
+        let mut windows_to_tile = Vec::new();
+        for window in self.space.elements() {
+            if !self.floating_windows.contains(window) 
+                && self.fullscreen_window.as_ref() != Some(window) {
+                windows_to_tile.push(window.clone());
+            }
+        }
+        
+        // get tile positions
+        let positions = self.tiling.tile(&windows_to_tile);
+        
+        // apply positions and sizes
+        for (window, rect) in positions {
+            // position the window
+            self.space.map_element(window.clone(), rect.loc, false);
+            
+            // resize the window if it has a toplevel surface
+            if let Some(toplevel) = window.toplevel() {
+                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                
+                toplevel.with_pending_state(|state| {
+                    state.size = Some(rect.size);
+                    state.bounds = Some(rect.size);
+                    
+                    // force server-side decorations (no client decorations)
+                    state.decoration_mode = Some(Mode::ServerSide);
+                    
+                    // set tiled states to remove decorations and inform the client
+                    state.states.set(State::TiledLeft);
+                    state.states.set(State::TiledRight);
+                    state.states.set(State::TiledTop);
+                    state.states.set(State::TiledBottom);
+                    
+                    // remove maximized/fullscreen states if present
+                    state.states.unset(State::Maximized);
+                    state.states.unset(State::Fullscreen);
+                });
+                
+                // only send configure if initial configure was already sent
+                if toplevel.is_initial_configure_sent() {
+                    toplevel.send_configure();
+                }
+            }
+        }
+        
+        tracing::info!("Arranged {} windows", windows_to_tile.len());
+        
+        // no need to send frame callbacks here - the render loop will handle that
+    }
+    
+    /// Toggle floating state for a window
+    pub fn toggle_floating(&mut self, window: &Window) {
+        if self.floating_windows.contains(window) {
+            self.floating_windows.remove(window);
+            tracing::debug!("Window no longer floating");
+        } else {
+            self.floating_windows.insert(window.clone());
+            
+            // clear tiled states when window becomes floating
+            if let Some(toplevel) = window.toplevel() {
+                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                
+                toplevel.with_pending_state(|state| {
+                    // restore client-side decorations
+                    state.decoration_mode = Some(Mode::ClientSide);
+                    
+                    state.states.unset(State::TiledLeft);
+                    state.states.unset(State::TiledRight);
+                    state.states.unset(State::TiledTop);
+                    state.states.unset(State::TiledBottom);
+                });
+                
+                if toplevel.is_initial_configure_sent() {
+                    toplevel.send_configure();
+                }
+            }
+            
+            tracing::debug!("Window set to floating");
+        }
+        self.arrange();
+    }
+    
+    /// Zoom - swap focused window with first master window
+    pub fn zoom(&mut self) {
+        if let Some(focused) = self.focused_window.clone() {
+            // find focused window in focus stack
+            if let Some(pos) = self.focus_stack.iter().position(|w| w == &focused) {
+                if pos > 0 {
+                    // swap with first window
+                    self.focus_stack.swap(0, pos);
+                    self.arrange();
+                    tracing::debug!("Zoomed window to master");
+                }
+            }
+        }
+    }
+    
+    /// Focus the next window in the stack
+    pub fn focus_next(&mut self) {
+        if self.focus_stack.len() <= 1 {
+            return;
+        }
+        
+        if let Some(focused) = &self.focused_window {
+            if let Some(pos) = self.focus_stack.iter().position(|w| w == focused) {
+                let next_pos = (pos + 1) % self.focus_stack.len();
+                self.focused_window = Some(self.focus_stack[next_pos].clone());
+                tracing::debug!("Focused next window");
+            }
+        } else if !self.focus_stack.is_empty() {
+            self.focused_window = Some(self.focus_stack[0].clone());
+        }
+    }
+    
+    /// Focus the previous window in the stack
+    pub fn focus_prev(&mut self) {
+        if self.focus_stack.len() <= 1 {
+            return;
+        }
+        
+        if let Some(focused) = &self.focused_window {
+            if let Some(pos) = self.focus_stack.iter().position(|w| w == focused) {
+                let prev_pos = if pos == 0 { self.focus_stack.len() - 1 } else { pos - 1 };
+                self.focused_window = Some(self.focus_stack[prev_pos].clone());
+                tracing::debug!("Focused previous window");
+            }
+        } else if !self.focus_stack.is_empty() {
+            self.focused_window = Some(self.focus_stack[self.focus_stack.len() - 1].clone());
+        }
+    }
+    
+    /// Close the focused window
+    pub fn close_focused(&mut self) {
+        if let Some(window) = self.focused_window.clone() {
+            if let Some(surface) = window.toplevel() {
+                surface.send_close();
+                tracing::info!("Sent close request to focused window");
+            }
+        } else {
+            tracing::warn!("No focused window to close");
+        }
     }
 }

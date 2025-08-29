@@ -48,6 +48,8 @@ pub struct State {
     pub seat: Seat<State>,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    #[allow(dead_code)] // used by delegate_xdg_decoration macro
+    pub xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
     pub shm_state: ShmState,
     pub data_device_state: DataDeviceState,
     #[allow(dead_code)] // will be used for output configuration protocol
@@ -91,6 +93,7 @@ impl State {
         // create compositor state
         let compositor_state = CompositorState::new::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new::<State>(&display_handle);
+        let xdg_decoration_state = smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<State>(&display_handle);
         let shm_state = ShmState::new::<State>(&display_handle, vec![]);
         let data_device_state = DataDeviceState::new::<State>(&display_handle);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<State>(&display_handle);
@@ -126,6 +129,7 @@ impl State {
             seat,
             compositor_state,
             xdg_shell_state,
+            xdg_decoration_state,
             shm_state,
             data_device_state,
             output_manager_state,

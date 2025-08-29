@@ -108,6 +108,7 @@ pub enum ThreadCommand {
     },
     /// Schedule a render frame
     ScheduleRender,
+    /// Mark structural changes (windows added/removed/moved)
     /// VBlank event occurred
     VBlank(Option<DrmEventMetadata>),
     /// Check if adaptive sync is available
@@ -265,6 +266,7 @@ struct SurfaceThreadState {
     
     // frame callback sequence number to prevent empty-damage commit busy loops
     frame_callback_seq: usize,
+    
 }
 
 /// Dmabuf feedback for a surface
@@ -357,6 +359,7 @@ impl Surface {
         debug!("Render scheduled for output {}", self.output.name());
         let _ = self.thread_command.send(ThreadCommand::ScheduleRender);
     }
+    
     
     /// Resume the surface with a compositor
     pub fn resume(&self, compositor: GbmDrmOutput) {
@@ -1180,7 +1183,7 @@ impl SurfaceThreadState {
                     // queue estimated vblank timer to maintain frame timing
                     self.queue_estimated_vblank(
                         estimated_presentation,
-                        false, // don't force redraw unless we have animations
+                        false, // don't force redraw
                     );
                 }
                 Err(e) => {
@@ -1325,7 +1328,7 @@ impl SurfaceThreadState {
                 // queue estimated vblank timer to maintain frame timing
                 self.queue_estimated_vblank(
                     estimated_presentation,
-                    false, // don't force redraw unless we have animations
+                    false, // don't force redraw
                 );
             }
             Err(e) => {
