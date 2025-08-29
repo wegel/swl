@@ -312,7 +312,7 @@ impl Shell {
         }).cloned()
     }
     
-    /// Get render elements for all windows on the given output
+    /// Get render elements for all windows and layer surfaces on the given output
     pub fn render_elements<R>(&self, output: &Output, renderer: &mut R) -> Vec<CosmicElement<R>>
     where
         R: AsGlowRenderer + Renderer + ImportAll + ImportMem,
@@ -321,14 +321,38 @@ impl Shell {
         let mut elements = Vec::new();
         let output_scale = Scale::from(output.current_scale().fractional_scale());
         
-        let window_count = self.space.elements().count();
-        tracing::debug!("Rendering {} windows in space", window_count);
+        use smithay::wayland::shell::wlr_layer::Layer;
         
-        // render all windows in the space
+        // render layer surfaces in correct order
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        let layers: Vec<_> = layer_map.layers().cloned().collect();
+        
+        // elements should be in front-to-back order for smithay's damage tracker
+        // (first element is topmost, last element is bottommost)
+        
+        // 1. Top and Overlay layers (topmost, in front of windows)
+        for layer_surface in &layers {
+            let layer = layer_surface.layer();
+            if layer == Layer::Top || layer == Layer::Overlay {
+                if let Some(geometry) = layer_map.layer_geometry(layer_surface) {
+                    let surface_elements = layer_surface.render_elements(
+                        renderer,
+                        geometry.loc.to_physical_precise_round(output_scale),
+                        output_scale,
+                        1.0, // alpha
+                    );
+                    
+                    elements.extend(
+                        surface_elements.into_iter()
+                            .map(|elem| CosmicElement::Surface(elem))
+                    );
+                }
+            }
+        }
+        
+        // 2. Windows (in the middle)
         for window in self.space.elements() {
             if let Some(location) = self.space.element_location(window) {
-                tracing::debug!("Window location: {:?}, geometry: {:?}", location, window.geometry());
-                
                 // get surface render elements and wrap them in CosmicElement
                 let surface_elements = window.render_elements(
                     renderer,
@@ -336,8 +360,6 @@ impl Shell {
                     output_scale,
                     1.0, // alpha
                 );
-                
-                tracing::debug!("Window produced {} render elements", surface_elements.len());
                 
                 // wrap each surface element in CosmicElement::Surface
                 elements.extend(
@@ -347,7 +369,27 @@ impl Shell {
             }
         }
         
-        tracing::debug!("Total render elements: {}", elements.len());
+        // 3. Background and Bottom layers (bottommost, behind windows)
+        for layer_surface in &layers {
+            let layer = layer_surface.layer();
+            if layer == Layer::Background || layer == Layer::Bottom {
+                if let Some(geometry) = layer_map.layer_geometry(layer_surface) {
+                    let surface_elements = layer_surface.render_elements(
+                        renderer,
+                        geometry.loc.to_physical_precise_round(output_scale),
+                        output_scale,
+                        1.0, // alpha
+                    );
+                    
+                    elements.extend(
+                        surface_elements.into_iter()
+                            .map(|elem| CosmicElement::Surface(elem))
+                    );
+                }
+            }
+        }
+        
+        
         elements
     }
     

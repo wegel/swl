@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 pub mod handlers;
+pub mod layer_shell;
 
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_decoration,
-    desktop::{Window, utils::send_frames_surface_tree, space::SpaceElement},
+    desktop::{Window, WindowSurfaceType, utils::send_frames_surface_tree, space::SpaceElement},
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
@@ -50,6 +51,32 @@ impl CompositorHandler for State {
     fn commit(&mut self, surface: &WlSurface) {
         // first load the buffer for various smithay helper functions (which also initializes the RendererSurfaceState)
         on_commit_buffer_handler::<Self>(surface);
+        
+        // check if this is a layer surface commit
+        let outputs = self.outputs.clone();
+        for output in &outputs {
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            if let Some(layer_surface) = layer_map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL) {
+                // layer surface committed, trigger render
+                layer_surface.cached_state();
+                
+                // check if it wants keyboard focus
+                if layer_surface.can_receive_keyboard_focus() {
+                    tracing::debug!("Layer surface requests keyboard focus");
+                    let keyboard = self.seat.get_keyboard().unwrap();
+                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                    keyboard.set_focus(self, Some(surface.clone()), serial);
+                }
+                
+                // send frame callback so the layer surface knows it can render again
+                let clock = Clock::<Monotonic>::new();
+                send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
+                
+                self.backend.schedule_render(output);
+                tracing::debug!("Layer surface committed, scheduling render for output {}", output.name());
+                return; // handled as layer surface
+            }
+        }
         
         // check if this is a pending window that should be mapped
         let mut mapped = false;

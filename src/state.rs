@@ -20,7 +20,10 @@ use smithay::{
         output::OutputManagerState,
         presentation::PresentationState,
         selection::data_device::DataDeviceState,
-        shell::xdg::{XdgShellState, ToplevelSurface},
+        shell::{
+            xdg::{XdgShellState, ToplevelSurface},
+            wlr_layer::WlrLayerShellState,
+        },
         shm::ShmState,
     },
     reexports::{
@@ -50,6 +53,7 @@ pub struct State {
     pub xdg_shell_state: XdgShellState,
     #[allow(dead_code)] // used by delegate_xdg_decoration macro
     pub xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
+    pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
     pub data_device_state: DataDeviceState,
     #[allow(dead_code)] // will be used for output configuration protocol
@@ -94,6 +98,7 @@ impl State {
         let compositor_state = CompositorState::new::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new::<State>(&display_handle);
         let xdg_decoration_state = smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<State>(&display_handle);
+        let layer_shell_state = WlrLayerShellState::new::<State>(&display_handle);
         let shm_state = ShmState::new::<State>(&display_handle, vec![]);
         let data_device_state = DataDeviceState::new::<State>(&display_handle);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<State>(&display_handle);
@@ -130,6 +135,7 @@ impl State {
             compositor_state,
             xdg_shell_state,
             xdg_decoration_state,
+            layer_shell_state,
             shm_state,
             data_device_state,
             output_manager_state,
@@ -217,7 +223,12 @@ impl State {
                             self.shell.write().unwrap().add_output(output);
                         }
                         // add outputs to our state
-                        self.outputs.extend(outputs);
+                        self.outputs.extend(outputs.clone());
+                        
+                        // schedule initial render for each output
+                        for output in outputs {
+                            device.schedule_render(&output);
+                        }
                     }
                     Err(err) => {
                         tracing::warn!("Failed to scan outputs for device {:?}: {}", drm_node, err);

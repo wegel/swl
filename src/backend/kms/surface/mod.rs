@@ -983,6 +983,19 @@ impl SurfaceThreadState {
                 );
             }
         }
+        drop(shell);  // release the read lock
+        
+        // send frame callbacks to layer surfaces on this output
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        for layer_surface in layer_map.layers() {
+            send_frames_surface_tree(
+                layer_surface.wl_surface(),
+                output,
+                clock,
+                None,
+                |_, _| Some(output.clone()),  // always send for now
+            );
+        }
     }
     
     /// Perform a redraw with damage tracking using PostprocessState
