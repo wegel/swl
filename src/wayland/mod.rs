@@ -257,6 +257,7 @@ impl XdgShellHandler for State {
                     w.toplevel().map_or(false, |t| t == &surface)
                 }) {
                     shell.fullscreen_window = None;
+                    shell.fullscreen_restore = None;
                 }
                 
                 // re-arrange remaining windows
@@ -349,10 +350,15 @@ impl XdgShellHandler for State {
         }).cloned();
         
         if let Some(window) = window {
+            // get the restore geometry before clearing fullscreen state
+            let restore_size = shell.take_fullscreen_restore()
+                .map(|rect| rect.size)
+                .unwrap_or_else(|| (800, 600).into());
+            
             surface.with_pending_state(|state| {
                 state.states.unset(xdg_toplevel::State::Fullscreen);
                 state.fullscreen_output = None;
-                state.size = Some((800, 600).into()); // restore default size
+                state.size = Some(restore_size);
             });
             surface.send_configure();
             

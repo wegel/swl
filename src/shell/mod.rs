@@ -41,6 +41,9 @@ pub struct Shell {
     /// Fullscreen window (if any)
     pub fullscreen_window: Option<Window>,
     
+    /// Geometry to restore when exiting fullscreen
+    pub fullscreen_restore: Option<Rectangle<i32, Logical>>,
+    
     /// Cursor position (relative to space origin)
     pub cursor_position: Point<f64, Logical>,
     
@@ -65,6 +68,7 @@ impl Shell {
             next_window_id: 1,
             focused_window: None,
             fullscreen_window: None,
+            fullscreen_restore: None,
             // start cursor off-screen to avoid rendering on all outputs at startup
             cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
@@ -203,10 +207,20 @@ impl Shell {
     /// Set a window as fullscreen
     pub fn set_fullscreen(&mut self, window: Window, fullscreen: bool) {
         if fullscreen {
+            // store current geometry before going fullscreen
+            if let Some(geometry) = self.space.element_geometry(&window) {
+                self.fullscreen_restore = Some(geometry);
+            }
             self.fullscreen_window = Some(window);
         } else if self.fullscreen_window.as_ref() == Some(&window) {
             self.fullscreen_window = None;
+            // geometry will be restored by the caller using take_fullscreen_restore()
         }
+    }
+    
+    /// Take the fullscreen restore geometry (used when exiting fullscreen)
+    pub fn take_fullscreen_restore(&mut self) -> Option<Rectangle<i32, Logical>> {
+        self.fullscreen_restore.take()
     }
     
     /// Refresh the space (needed for damage tracking)
