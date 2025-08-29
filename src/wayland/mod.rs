@@ -62,7 +62,7 @@ impl CompositorHandler for State {
                 window.on_commit();
                 window.refresh();
                 
-                if let Some(output) = self.outputs.first() {
+                if let Some(output) = self.outputs.first().cloned() {
                     tracing::info!("Mapping pending window to output {} (geometry: {:?})", 
                                   output.name(), window.geometry());
                     
@@ -72,18 +72,25 @@ impl CompositorHandler for State {
                     });
                     
                     let mut shell = self.shell.write().unwrap();
-                    shell.add_window(window.clone(), output);
+                    shell.add_window(window.clone(), &output);
                     
                     if is_fullscreen {
                         tracing::debug!("Window is fullscreen, updating shell state");
                         shell.set_fullscreen(window.clone(), true);
                     }
+                    drop(shell); // release lock before setting keyboard focus
+                    
+                    // set keyboard focus to the new window
+                    let keyboard = self.seat.get_keyboard().unwrap();
+                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                    keyboard.set_focus(self, Some(toplevel.wl_surface().clone()), serial);
+                    tracing::debug!("Set keyboard focus to new window");
                     
                     // send initial frame callback
                     let clock = Clock::<Monotonic>::new();
-                    send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
+                    send_frames_surface_tree(surface, &output, clock.now(), None, |_, _| None);
                     
-                    self.backend.schedule_render(output);
+                    self.backend.schedule_render(&output);
                     mapped = true;
                 } else {
                     tracing::warn!("No outputs available for window mapping");

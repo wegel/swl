@@ -13,8 +13,9 @@ use smithay::{
         Space, Window,
     },
     input::pointer::CursorImageStatus,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     output::Output,
-    utils::{Logical, Point, Scale},
+    utils::{Logical, Point, Rectangle, Scale},
 };
 use std::collections::HashMap;
 
@@ -134,13 +135,71 @@ impl Shell {
     
     /// Get the window under the given point
     pub fn window_under(&self, point: Point<f64, Logical>) -> Option<Window> {
-        self.space
-            .elements()
-            .find(|window| {
-                let geometry = self.space.element_geometry(window).unwrap();
-                geometry.to_f64().contains(point)
-            })
-            .cloned()
+        use tracing::debug;
+        
+        for window in self.space.elements() {
+            // get the window's position in space
+            let location = self.space.element_location(window).unwrap_or_default();
+            // get the window's bounding box (includes decorations)
+            let bbox = window.bbox();
+            // translate bbox to global coordinates
+            let global_bbox = Rectangle::from_loc_and_size(
+                location + bbox.loc,
+                bbox.size,
+            );
+            
+            debug!("Checking window bbox at {:?} against point {:?}", global_bbox, point);
+            if global_bbox.to_f64().contains(point) {
+                debug!("Point is within window bounds!");
+                return Some(window.clone());
+            }
+        }
+        debug!("No window found at point {:?}", point);
+        None
+    }
+    
+    /// Find the surface under a point (including decorations)
+    pub fn surface_under(&self, point: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        use smithay::desktop::WindowSurfaceType;
+        use tracing::trace;
+        
+        trace!("Looking for surface under point: {:?}", point);
+        
+        // find window containing the point
+        for window in self.space.elements() {
+            // get the window's position in space  
+            let location = self.space.element_location(window).unwrap_or_default();
+            // get the window's bounding box (includes decorations)
+            let bbox = window.bbox();
+            // translate bbox to global coordinates
+            let global_bbox = Rectangle::from_loc_and_size(
+                location + bbox.loc,
+                bbox.size,
+            );
+            
+            trace!("Window bbox: {:?}", global_bbox);
+            if global_bbox.to_f64().contains(point) {
+                // convert point to window-relative coordinates
+                // window.surface_under expects coordinates relative to the window's origin (0,0)
+                let window_relative = point - location.to_f64();
+                trace!("Window-relative point: {:?}", window_relative);
+                
+                // check for surface under this point (including decorations)
+                if let Some((surface, loc)) = window.surface_under(
+                    window_relative,
+                    WindowSurfaceType::ALL,
+                ) {
+                    // convert back to global coordinates (and to f64)
+                    let global_loc = (loc + location).to_f64();
+                    trace!("Found surface at global location: {:?}", global_loc);
+                    return Some((surface, global_loc));
+                } else {
+                    trace!("No surface found in window at relative point");
+                }
+            }
+        }
+        trace!("No window contains the point");
+        None
     }
     
     /// Get the current fullscreen window (if any)

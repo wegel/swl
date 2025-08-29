@@ -2,7 +2,7 @@
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Device, DeviceCapability, InputBackend, InputEvent, 
+        AbsolutePositionEvent, ButtonState, Device, DeviceCapability, InputBackend, InputEvent, 
         KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent, PointerAxisEvent, 
         Axis, AxisSource,
     },
@@ -100,9 +100,12 @@ impl State {
                     let serial = SERIAL_COUNTER.next_serial();
                     let time = Event::time_msec(&event);
                     
+                    // find surface under cursor (including decorations)
+                    let surface_under = self.shell.read().unwrap().surface_under(location);
+                    
                     pointer.motion(
                         self,
-                        None, // no surface under for now
+                        surface_under,
                         &MotionEvent {
                             location,
                             serial,
@@ -138,9 +141,12 @@ impl State {
                     let serial = SERIAL_COUNTER.next_serial();
                     let time = Event::time_msec(&event);
                     
+                    // find surface under cursor (including decorations)
+                    let surface_under = self.shell.read().unwrap().surface_under(location);
+                    
                     pointer.motion(
                         self,
-                        None,
+                        surface_under,
                         &MotionEvent {
                             location,
                             serial,
@@ -162,6 +168,35 @@ impl State {
                 let button = event.button_code();
                 let state = event.state();
                 debug!("Pointer button: {} {:?}", button, state);
+                
+                // on button press, check if we need to focus a different window
+                if state == ButtonState::Pressed {
+                    let pointer_loc = self.seat.get_pointer().unwrap().current_location();
+                    debug!("Button pressed at location: {:?}", pointer_loc);
+                    
+                    // find window under cursor and focus it
+                    let window_to_focus = {
+                        let shell = self.shell.read().unwrap();
+                        let window = shell.window_under(pointer_loc);
+                        debug!("Window under cursor: {:?}", window.is_some());
+                        window
+                    };
+                    
+                    if let Some(window) = window_to_focus {
+                        // update focused window in shell
+                        self.shell.write().unwrap().focused_window = Some(window.clone());
+                        
+                        // set keyboard focus
+                        if let Some(surface) = window.toplevel().and_then(|t| Some(t.wl_surface().clone())) {
+                            let keyboard = self.seat.get_keyboard().unwrap();
+                            let serial = SERIAL_COUNTER.next_serial();
+                            keyboard.set_focus(self, Some(surface), serial);
+                            debug!("Set keyboard focus to clicked window");
+                        }
+                    } else {
+                        debug!("No window found under cursor for focus");
+                    }
+                }
                 
                 {
                     let seat = &self.seat;
