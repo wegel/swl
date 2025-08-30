@@ -81,16 +81,13 @@ impl Keybindings {
         ));
         bindings.push(Keybinding::new(
             modkey,
-            xkb::KEY_Return,
+            xkb::KEY_m,
             Action::Zoom,
         ));
-        // close window - handle both lowercase and uppercase C
+        // close window
         bindings.push(Keybinding::new(
-            ModifiersState {
-                shift: true,
-                ..modkey
-            },
-            xkb::KEY_C,  // uppercase when shift is pressed
+            modkey,
+            xkb::KEY_q,
             Action::CloseWindow,
         ));
         bindings.push(Keybinding::new(
@@ -120,34 +117,30 @@ impl Keybindings {
         ));
         bindings.push(Keybinding::new(
             modkey,
-            xkb::KEY_d,
+            xkb::KEY_comma,
             Action::DecreaseMasterCount,
         ));
         
         // applications
-        // launch terminal - Return key doesn't change with shift
         bindings.push(Keybinding::new(
-            ModifiersState {
-                shift: true,
-                ..modkey
-            },
+            modkey,
             xkb::KEY_Return,
             Action::LaunchTerminal,
         ));
         bindings.push(Keybinding::new(
             modkey,
-            xkb::KEY_p,
+            xkb::KEY_d,
             Action::LaunchMenu,
         ));
         
         // system
-        // quit - handle uppercase Q when shift is pressed
+        // quit - handle uppercase E when shift is pressed
         bindings.push(Keybinding::new(
             ModifiersState {
                 shift: true,
                 ..modkey
             },
-            xkb::KEY_Q,  // uppercase when shift is pressed
+            xkb::KEY_E,  // uppercase when shift is pressed
             Action::Quit,
         ));
         
