@@ -25,6 +25,9 @@ use smithay::{
             wlr_layer::WlrLayerShellState,
         },
         shm::ShmState,
+        viewporter::ViewporterState,
+        pointer_gestures::PointerGesturesState,
+        relative_pointer::RelativePointerManagerState,
     },
     reexports::{
         calloop::{LoopHandle, LoopSignal},
@@ -67,6 +70,13 @@ pub struct State {
     pub cursor_state: CursorState,
     session_active: bool,
     pub needs_focus_refresh: bool,
+    // Additional protocol support
+    #[allow(dead_code)]
+    pub viewporter_state: ViewporterState,
+    #[allow(dead_code)]
+    pub pointer_gestures_state: PointerGesturesState,
+    #[allow(dead_code)]
+    pub relative_pointer_manager_state: RelativePointerManagerState,
 }
 
 // suppress warnings for now - we'll use these soon
@@ -124,6 +134,11 @@ impl State {
         // using CLOCK_MONOTONIC (id = 1) as the clock
         let presentation_state = PresentationState::new::<State>(&display_handle, 1);
         
+        // Initialize additional protocol support
+        let viewporter_state = ViewporterState::new::<State>(&display_handle);
+        let pointer_gestures_state = PointerGesturesState::new::<State>(&display_handle);
+        let relative_pointer_manager_state = RelativePointerManagerState::new::<State>(&display_handle);
+        
         Self {
             display_handle: display_handle.clone(),
             loop_handle,
@@ -147,6 +162,9 @@ impl State {
             cursor_state: Mutex::new(CursorStateInner::default()),
             session_active: false,
             needs_focus_refresh: false,
+            viewporter_state,
+            pointer_gestures_state,
+            relative_pointer_manager_state,
         }
     }
     

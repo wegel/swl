@@ -7,10 +7,22 @@ use smithay::{
         AbsolutePositionEvent, ButtonState, Device, DeviceCapability, InputBackend, InputEvent, 
         KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent, PointerAxisEvent, 
         Axis, AxisSource,
+        GestureBeginEvent, GestureEndEvent,
+        GestureSwipeUpdateEvent as GestureSwipeUpdateEventTrait,
+        GesturePinchUpdateEvent as GesturePinchUpdateEventTrait,
     },
     input::{
         keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, MotionEvent,
+            GestureSwipeBeginEvent as PointerSwipeBeginEvent,
+            GestureSwipeUpdateEvent as PointerSwipeUpdateEvent,
+            GestureSwipeEndEvent as PointerSwipeEndEvent,
+            GesturePinchBeginEvent as PointerPinchBeginEvent,
+            GesturePinchUpdateEvent as PointerPinchUpdateEvent,
+            GesturePinchEndEvent as PointerPinchEndEvent,
+            GestureHoldBeginEvent as PointerHoldBeginEvent,
+            GestureHoldEndEvent as PointerHoldEndEvent,
+        },
         Seat, SeatState, SeatHandler,
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -262,7 +274,105 @@ impl State {
                     }
                     
                     pointer.axis(self, frame);
+                    pointer.frame(self);
                 }
+            }
+            
+            // Gesture events for touchpad support
+            InputEvent::GestureSwipeBegin { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_swipe_begin(
+                    self,
+                    &PointerSwipeBeginEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: event.time_msec(),
+                        fingers: event.fingers(),
+                    },
+                );
+            }
+            
+            InputEvent::GestureSwipeUpdate { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_swipe_update(
+                    self,
+                    &PointerSwipeUpdateEvent {
+                        time: event.time_msec(),
+                        delta: event.delta(),
+                    },
+                );
+            }
+            
+            InputEvent::GestureSwipeEnd { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_swipe_end(
+                    self,
+                    &PointerSwipeEndEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: event.time_msec(),
+                        cancelled: event.cancelled(),
+                    },
+                );
+            }
+            
+            InputEvent::GesturePinchBegin { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_pinch_begin(
+                    self,
+                    &PointerPinchBeginEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: event.time_msec(),
+                        fingers: event.fingers(),
+                    },
+                );
+            }
+            
+            InputEvent::GesturePinchUpdate { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_pinch_update(
+                    self,
+                    &PointerPinchUpdateEvent {
+                        time: event.time_msec(),
+                        delta: event.delta(),
+                        scale: event.scale(),
+                        rotation: event.rotation(),
+                    },
+                );
+            }
+            
+            InputEvent::GesturePinchEnd { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_pinch_end(
+                    self,
+                    &PointerPinchEndEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: event.time_msec(),
+                        cancelled: event.cancelled(),
+                    },
+                );
+            }
+            
+            InputEvent::GestureHoldBegin { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_hold_begin(
+                    self,
+                    &PointerHoldBeginEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: event.time_msec(),
+                        fingers: event.fingers(),
+                    },
+                );
+            }
+            
+            InputEvent::GestureHoldEnd { event, .. } => {
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.gesture_hold_end(
+                    self,
+                    &PointerHoldEndEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: event.time_msec(),
+                        cancelled: event.cancelled(),
+                    },
+                );
             }
             
             _ => {
