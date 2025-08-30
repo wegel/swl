@@ -134,6 +134,28 @@ fn init_libinput(
         match &mut event {
             InputEvent::DeviceAdded { device } => {
                 info!("Input device added: {}", device.name());
+                
+                // Configure touchpad tap-to-click
+                if device.config_tap_finger_count() > 0 {
+                    // This is a touchpad
+                    info!("Configuring touchpad: {}", device.name());
+                    
+                    // Enable tap-to-click
+                    if let Err(e) = device.config_tap_set_enabled(true) {
+                        warn!("Failed to enable tap-to-click: {:?}", e);
+                    }
+                    
+                    // Enable tap-and-drag
+                    if let Err(e) = device.config_tap_set_drag_enabled(true) {
+                        warn!("Failed to enable tap-drag: {:?}", e);
+                    }
+                    
+                    // Enable drag lock (keep dragging when lifting finger briefly)
+                    if let Err(e) = device.config_tap_set_drag_lock_enabled(true) {
+                        warn!("Failed to enable tap-drag-lock: {:?}", e);
+                    }
+                }
+                
                 // track input devices
                 if let BackendData::Kms(kms) = &mut state.backend {
                     kms.input_devices.insert(device.name().into(), device.clone());
