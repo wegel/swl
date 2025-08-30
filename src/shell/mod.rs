@@ -155,11 +155,48 @@ impl Shell {
     /// Find the surface under a point (including decorations)
     pub fn surface_under(&self, point: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
         use smithay::desktop::WindowSurfaceType;
+        use smithay::wayland::shell::wlr_layer::Layer;
         use tracing::trace;
         
         trace!("Looking for surface under point: {:?}", point);
         
-        // find window containing the point
+        // Find which output contains the point
+        let output = self.space.outputs().find(|o| {
+            self.space.output_geometry(o)
+                .map(|geo| geo.to_f64().contains(point))
+                .unwrap_or(false)
+        })?;
+        
+        let output_geo = self.space.output_geometry(output).unwrap();
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        let relative_point = point - output_geo.loc.to_f64();
+        
+        // Check layer surfaces in order (front to back)
+        // 1. Overlay layer (always on top)
+        if let Some(layer) = layer_map.layer_under(Layer::Overlay, relative_point) {
+            if let Some(layer_geo) = layer_map.layer_geometry(layer) {
+                let layer_relative = relative_point - layer_geo.loc.to_f64();
+                if let Some((surface, surf_loc)) = layer.surface_under(layer_relative, WindowSurfaceType::ALL) {
+                    let global_loc = surf_loc.to_f64() + layer_geo.loc.to_f64() + output_geo.loc.to_f64();
+                    trace!("Found overlay layer surface at {:?}", global_loc);
+                    return Some((surface, global_loc));
+                }
+            }
+        }
+        
+        // 2. Top layer (above windows)
+        if let Some(layer) = layer_map.layer_under(Layer::Top, relative_point) {
+            if let Some(layer_geo) = layer_map.layer_geometry(layer) {
+                let layer_relative = relative_point - layer_geo.loc.to_f64();
+                if let Some((surface, surf_loc)) = layer.surface_under(layer_relative, WindowSurfaceType::ALL) {
+                    let global_loc = surf_loc.to_f64() + layer_geo.loc.to_f64() + output_geo.loc.to_f64();
+                    trace!("Found top layer surface at {:?}", global_loc);
+                    return Some((surface, global_loc));
+                }
+            }
+        }
+        
+        // 3. Windows
         for window in self.space.elements() {
             // get the window's position in space  
             let location = self.space.element_location(window).unwrap_or_default();
@@ -192,7 +229,32 @@ impl Shell {
                 }
             }
         }
-        trace!("No window contains the point");
+        
+        // 4. Bottom layer (below windows)
+        if let Some(layer) = layer_map.layer_under(Layer::Bottom, relative_point) {
+            if let Some(layer_geo) = layer_map.layer_geometry(layer) {
+                let layer_relative = relative_point - layer_geo.loc.to_f64();
+                if let Some((surface, surf_loc)) = layer.surface_under(layer_relative, WindowSurfaceType::ALL) {
+                    let global_loc = surf_loc.to_f64() + layer_geo.loc.to_f64() + output_geo.loc.to_f64();
+                    trace!("Found bottom layer surface at {:?}", global_loc);
+                    return Some((surface, global_loc));
+                }
+            }
+        }
+        
+        // 5. Background layer (bottommost)
+        if let Some(layer) = layer_map.layer_under(Layer::Background, relative_point) {
+            if let Some(layer_geo) = layer_map.layer_geometry(layer) {
+                let layer_relative = relative_point - layer_geo.loc.to_f64();
+                if let Some((surface, surf_loc)) = layer.surface_under(layer_relative, WindowSurfaceType::ALL) {
+                    let global_loc = surf_loc.to_f64() + layer_geo.loc.to_f64() + output_geo.loc.to_f64();
+                    trace!("Found background layer surface at {:?}", global_loc);
+                    return Some((surface, global_loc));
+                }
+            }
+        }
+        
+        trace!("No surface found under point");
         None
     }
     

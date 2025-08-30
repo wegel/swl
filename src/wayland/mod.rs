@@ -6,6 +6,7 @@ pub mod layer_shell;
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_decoration,
+    delegate_viewporter, delegate_pointer_gestures, delegate_relative_pointer,
     desktop::{Window, WindowSurfaceType, utils::send_frames_surface_tree, space::SpaceElement},
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -61,7 +62,19 @@ impl CompositorHandler for State {
                 layer_surface.cached_state();
                 
                 // check if it wants keyboard focus
-                if layer_surface.can_receive_keyboard_focus() {
+                let wants_focus = layer_surface.can_receive_keyboard_focus();
+                
+                // drop the immutable borrow before we get a mutable one
+                drop(layer_map);
+                
+                // re-arrange layers as the surface may have changed size
+                let mut layer_map = smithay::desktop::layer_map_for_output(output);
+                let changed = layer_map.arrange();
+                if changed {
+                    tracing::debug!("Layer arrangement changed after commit");
+                }
+                
+                if wants_focus {
                     tracing::debug!("Layer surface requests keyboard focus");
                     let keyboard = self.seat.get_keyboard().unwrap();
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
@@ -421,5 +434,10 @@ delegate_shm!(State);
 delegate_seat!(State);
 delegate_xdg_shell!(State);
 delegate_presentation!(State);
+
+// Additional protocol support - these work out of the box
+delegate_viewporter!(State);
+delegate_pointer_gestures!(State);
+delegate_relative_pointer!(State);
 
 // we already implement SeatHandler in input/mod.rs

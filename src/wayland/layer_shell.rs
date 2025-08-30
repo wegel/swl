@@ -40,12 +40,15 @@ impl WlrLayerShellHandler for State {
             // create the layer surface
             let layer_surface = LayerSurface::new(surface, namespace);
             
-            // layer is already set when creating the surface, just send configure
-            layer_surface.layer_surface().send_configure();
-            
             // map it to the output
             let mut layer_map = layer_map_for_output(&output);
             layer_map.map_layer(&layer_surface).unwrap();
+            
+            // arrange layers to compute proper geometry
+            layer_map.arrange();
+            
+            // now send configure with the computed dimensions
+            layer_surface.layer_surface().send_configure();
             
             debug!("Layer surface mapped to output {}", output.name());
             
