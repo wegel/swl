@@ -21,7 +21,7 @@ use smithay::{
             damage::{OutputDamageTracker, Error as RenderError},
             element::{
                 texture::{TextureRenderBuffer, TextureRenderElement},
-                Kind,
+                Kind, RenderElementStates,
             },
             glow::GlowRenderer,
             gles::GlesTexture,
@@ -115,6 +115,8 @@ pub enum ThreadCommand {
     AdaptiveSyncAvailable(std::sync::mpsc::SyncSender<Result<Option<VrrSupport>>>),
     /// Set adaptive sync mode
     UseAdaptiveSync(AdaptiveSync),
+    /// Render element states from a successful render
+    RenderStates(RenderElementStates),
     /// End the thread
     End,
 }
@@ -122,7 +124,8 @@ pub enum ThreadCommand {
 /// Commands sent from surface thread back to main thread
 #[derive(Debug)]
 pub enum SurfaceCommand {
-    // placeholder for now - we'll add commands as needed
+    /// Render states from a successful render
+    RenderStates(RenderElementStates),
 }
 
 /// Simplified PostprocessState for offscreen rendering
@@ -337,11 +340,16 @@ impl Surface {
             .context("Failed to spawn surface thread")?;
         
         // register channel to receive commands from surface thread
+        let output_for_handler = output.clone();
         let thread_token = event_loop
-            .insert_source(rx2, move |command, _, _state| match command {
-                Event::Msg(_cmd) => {
-                    // handle surface commands from thread
-                    // we'll add handling as needed
+            .insert_source(rx2, move |command, _, state| match command {
+                Event::Msg(cmd) => {
+                    match cmd {
+                        SurfaceCommand::RenderStates(render_states) => {
+                            // update primary output and fractional scale for all surfaces
+                            state.update_primary_output(&output_for_handler, &render_states);
+                        }
+                    }
                 }
                 Event::Closed => {}
             })
@@ -651,6 +659,11 @@ fn surface_thread(
             }
             Event::Msg(ThreadCommand::UseAdaptiveSync(vrr)) => {
                 _state.vrr_mode = vrr;
+            }
+            Event::Msg(ThreadCommand::RenderStates(_)) => {
+                // RenderStates are handled in the main thread, not the surface thread
+                // This shouldn't happen, but we'll just ignore it if it does
+                warn!("Received RenderStates in surface thread - this should be handled in main thread");
             }
             Event::Msg(ThreadCommand::End) => {
                 signal.stop();
@@ -1167,11 +1180,14 @@ impl SurfaceThreadState {
             // mark submission time
             self.timings.submitted_for_presentation(&self.clock);
             
+            // extract render states before any other operations
+            let render_states = frame_result.states;
+            
             // collect presentation feedback if frame is not empty
             let feedback = if !frame_result.is_empty {
                 Some(self.shell.read().unwrap().take_presentation_feedback(
                     &self.output,
-                    &frame_result.states,
+                    &render_states,
                 ))
             } else {
                 None
@@ -1193,6 +1209,11 @@ impl SurfaceThreadState {
                     // send frame callbacks now since we queued a frame
                     self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
                     self.send_frame_callbacks();
+                    
+                    // send render states back to main thread for fractional scale updates
+                    if let Err(e) = self.thread_sender.send(SurfaceCommand::RenderStates(render_states)) {
+                        warn!("Failed to send render states to main thread: {:?}", e);
+                    }
                     
                     trace!("Direct frame queued for output {}", self.output.name());
                 }
@@ -1313,11 +1334,14 @@ impl SurfaceThreadState {
         // mark submission time
         self.timings.submitted_for_presentation(&self.clock);
         
+        // extract render states before any other operations
+        let render_states = frame_result.states;
+        
         // collect presentation feedback if frame is not empty
         let feedback = if !frame_result.is_empty {
             Some(self.shell.read().unwrap().take_presentation_feedback(
                 &self.output,
-                &frame_result.states,
+                &render_states,
             ))
         } else {
             None
@@ -1335,6 +1359,11 @@ impl SurfaceThreadState {
                 // send frame callbacks now since we queued a frame
                 self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
                 self.send_frame_callbacks();
+                
+                // send render states back to main thread for fractional scale updates
+                if let Err(e) = self.thread_sender.send(SurfaceCommand::RenderStates(render_states)) {
+                    warn!("Failed to send render states to main thread: {:?}", e);
+                }
                 
                 trace!("Frame queued for output {}, damage regions: {}", 
                     self.output.name(), 

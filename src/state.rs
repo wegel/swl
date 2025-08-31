@@ -10,14 +10,22 @@ use smithay::{
     backend::{
         drm::DrmNode,
         input::InputEvent,
+        renderer::element::{RenderElementStates, default_primary_scanout_output_compare},
         session::Session,
     },
-    desktop::Window,
+    desktop::{
+        Window,
+        utils::{
+            update_surface_primary_scanout_output,
+            with_surfaces_surface_tree,
+        },
+    },
     input::{Seat, SeatState},
     output::Output,
     wayland::{
         compositor::CompositorState,
         dmabuf::{DmabufState, DmabufFeedbackBuilder},
+        fractional_scale::with_fractional_scale,
         output::OutputManagerState,
         presentation::PresentationState,
         selection::{
@@ -39,7 +47,7 @@ use smithay::{
     },
     reexports::{
         calloop::{LoopHandle, LoopSignal},
-        wayland_server::{DisplayHandle},
+        wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
     },
 };
 
@@ -264,6 +272,49 @@ impl State {
     {
         // delegate to our input handler
         self.process_input_event_impl(event);
+    }
+    
+    /// Update primary output and fractional scale for all surfaces on the given output
+    pub fn update_primary_output(&self, output: &Output, render_element_states: &RenderElementStates) {
+        let shell = self.shell.read().unwrap();
+        
+        // Processor function that updates primary output and fractional scale
+        let processor = |surface: &WlSurface, states: &smithay::wayland::compositor::SurfaceData| {
+            let primary_scanout_output = update_surface_primary_scanout_output(
+                surface,
+                output,
+                states,
+                render_element_states,
+                default_primary_scanout_output_compare,
+            );
+            
+            // If the primary output changed, update the fractional scale
+            if let Some(output) = primary_scanout_output {
+                with_fractional_scale(states, |fraction_scale| {
+                    fraction_scale.set_preferred_scale(output.current_scale().fractional_scale());
+                });
+            }
+        };
+        
+        // Process all windows in the space
+        for window in shell.space.elements() {
+            if let Some(toplevel) = window.toplevel() {
+                with_surfaces_surface_tree(toplevel.wl_surface(), processor);
+            }
+        }
+        
+        // Process layer shell surfaces
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        for surface in layer_map.layers() {
+            with_surfaces_surface_tree(surface.wl_surface(), processor);
+        }
+        
+        // Process cursor surfaces  
+        if let Some(pointer) = self.seat.get_pointer() {
+            if let Some(surface) = pointer.current_focus() {
+                with_surfaces_surface_tree(&surface, processor);
+            }
+        }
     }
     
     /// Handle device addition
