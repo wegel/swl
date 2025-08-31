@@ -72,12 +72,16 @@ impl CompositorHandler for State {
                 drop(layer_map);
                 
                 // re-arrange layers as the surface may have changed size
-                let mut layer_map = smithay::desktop::layer_map_for_output(output);
-                let changed = layer_map.arrange();
+                let changed = {
+                    let mut layer_map = smithay::desktop::layer_map_for_output(output);
+                    layer_map.arrange()
+                }; // layer_map dropped here, mutex released
+                
                 if changed {
                     tracing::debug!("Layer arrangement changed after commit");
-                    // re-arrange windows to respect new exclusive zones
-                    self.shell.write().unwrap().arrange();
+                    // mark that windows need to be re-arranged
+                    self.shell.write().unwrap().needs_arrange = true;
+                    self.backend.schedule_render(output);
                 }
                 
                 if wants_focus {
@@ -125,7 +129,7 @@ impl CompositorHandler for State {
                     if is_fullscreen {
                         tracing::debug!("Window is fullscreen, updating shell state");
                         shell.set_fullscreen(window.clone(), true);
-                        shell.arrange();  // Re-arrange to position fullscreen window
+                        shell.needs_arrange = true;  // Mark for re-arrangement to position fullscreen window
                     }
                     drop(shell); // release lock before setting keyboard focus
                     
@@ -299,6 +303,11 @@ impl XdgShellHandler for State {
                     w.toplevel().map_or(false, |t| t == &surface)
                 });
                 
+                // clear focused window if it was destroyed
+                if was_focused {
+                    shell.focused_window = None;
+                }
+                
                 // update fullscreen window if it was destroyed
                 if shell.fullscreen_window.as_ref().map_or(false, |w| {
                     w.toplevel().map_or(false, |t| t == &surface)
@@ -307,17 +316,20 @@ impl XdgShellHandler for State {
                     shell.fullscreen_restore = None;
                 }
                 
-                // re-arrange remaining windows
-                shell.arrange();
+                // mark for re-arrangement of remaining windows
+                shell.needs_arrange = true;
             }
             
             (output, was_focused)
         };
         
-        // if the destroyed window was focused, mark for focus refresh
+        // if the destroyed window was focused, clear keyboard focus and mark for refresh
         if was_focused {
+            // clear keyboard focus immediately to ensure refresh_focus works properly
+            let keyboard = self.seat.get_keyboard().unwrap();
+            keyboard.set_focus(self, Option::<WlSurface>::None, smithay::utils::SERIAL_COUNTER.next_serial());
+            
             self.needs_focus_refresh = true;
-            tracing::debug!("Focused window destroyed, marked for focus refresh");
         }
         
         // schedule render for the output
@@ -400,7 +412,7 @@ impl XdgShellHandler for State {
             surface.send_configure();
             
             shell.set_fullscreen(window, false);
-            shell.arrange();  // Re-arrange to return window to tiled position
+            shell.needs_arrange = true;  // Mark for re-arrangement to return window to tiled position
         }
     }
     
