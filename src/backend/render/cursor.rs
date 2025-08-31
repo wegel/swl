@@ -102,13 +102,25 @@ enum Error {
 }
 
 fn load_icon(theme: &CursorTheme, shape: CursorIcon) -> Result<Vec<Image>, Error> {
-    let icon_path = theme
-        .load_icon(&shape.to_string())
-        .ok_or(Error::NoDefaultCursor)?;
-    let mut cursor_file = std::fs::File::open(&icon_path)?;
-    let mut cursor_data = Vec::new();
-    cursor_file.read_to_end(&mut cursor_data)?;
-    parse_xcursor(&cursor_data).ok_or(Error::Parse)
+    // Try primary name first
+    if let Some(icon_path) = theme.load_icon(shape.name()) {
+        let mut cursor_file = std::fs::File::open(&icon_path)?;
+        let mut cursor_data = Vec::new();
+        cursor_file.read_to_end(&mut cursor_data)?;
+        return parse_xcursor(&cursor_data).ok_or(Error::Parse);
+    }
+    
+    // Try alternative names
+    for alt_name in shape.alt_names() {
+        if let Some(icon_path) = theme.load_icon(alt_name) {
+            let mut cursor_file = std::fs::File::open(&icon_path)?;
+            let mut cursor_data = Vec::new();
+            cursor_file.read_to_end(&mut cursor_data)?;
+            return parse_xcursor(&cursor_data).ok_or(Error::Parse);
+        }
+    }
+    
+    Err(Error::NoDefaultCursor)
 }
 
 render_elements! {

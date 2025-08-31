@@ -525,6 +525,12 @@ impl SeatHandler for State {
         let cursor_status = seat.user_data().get::<std::sync::Mutex<smithay::input::pointer::CursorImageStatus>>().unwrap();
         *cursor_status.lock().unwrap() = image.clone();
         
+        // also update cursor theme state if it's a named cursor
+        if let smithay::input::pointer::CursorImageStatus::Named(icon) = &image {
+            let cursor_state = seat.user_data().get::<crate::backend::render::cursor::CursorState>().unwrap();
+            cursor_state.lock().unwrap().current_cursor = Some(*icon);
+        }
+        
         // also store in shell for rendering
         self.shell.write().unwrap().cursor_status = image;
         

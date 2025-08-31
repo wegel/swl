@@ -143,6 +143,8 @@ impl State {
         seat.user_data().insert_if_missing_threadsafe(|| {
             Mutex::new(smithay::input::pointer::CursorImageStatus::default_named())
         });
+        // add cursor theme state
+        seat.user_data().insert_if_missing_threadsafe(crate::backend::render::cursor::CursorState::default);
         
         // create the shell
         let shell = Arc::new(RwLock::new(Shell::new()));
@@ -301,7 +303,7 @@ impl State {
                 }
                 
                 // scan for connected outputs
-                match device.scan_outputs(&self.display_handle, &self.loop_handle, &mut kms.gpu_manager, self.shell.clone()) {
+                match device.scan_outputs(&self.display_handle, &self.loop_handle, &mut kms.gpu_manager, self.shell.clone(), self.seat.clone()) {
                     Ok(outputs) => {
                         // add outputs to the shell's space
                         for output in &outputs {

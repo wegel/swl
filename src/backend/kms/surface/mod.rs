@@ -260,6 +260,9 @@ struct SurfaceThreadState {
     // shell reference for element collection
     shell: Arc<RwLock<Shell>>,
     
+    // seat for cursor state access
+    seat: smithay::input::Seat<crate::State>,
+    
     // event loop
     loop_handle: LoopHandle<'static, Self>,
     clock: Clock<Monotonic>,
@@ -301,6 +304,7 @@ impl Surface {
         target_node: DrmNode,
         event_loop: &LoopHandle<'static, crate::state::State>,
         shell: Arc<RwLock<Shell>>,
+        seat: smithay::input::Seat<crate::State>,
     ) -> Result<Self> {
         info!("Creating surface for output {} on CRTC {:?}", output.name(), crtc);
         
@@ -325,6 +329,7 @@ impl Surface {
                     tx2,
                     rx,
                     shell_clone,
+                    seat,
                 ) {
                     error!("Surface thread crashed: {}", err);
                 }
@@ -473,8 +478,9 @@ impl SurfaceManager {
         target_node: DrmNode,
         event_loop: &LoopHandle<'static, crate::state::State>,
         shell: Arc<RwLock<Shell>>,
+        seat: smithay::input::Seat<crate::State>,
     ) -> Result<()> {
-        let surface = Surface::new(output, crtc, connector, primary_node, target_node, event_loop, shell)?;
+        let surface = Surface::new(output, crtc, connector, primary_node, target_node, event_loop, shell, seat)?;
         self.surfaces.insert(crtc, surface);
         debug!("Surface created for CRTC {:?}", crtc);
         Ok(())
@@ -549,6 +555,7 @@ fn surface_thread(
     thread_sender: Sender<SurfaceCommand>,
     thread_receiver: Channel<ThreadCommand>,
     shell: Arc<RwLock<Shell>>,
+    seat: smithay::input::Seat<crate::State>,
 ) -> Result<()> {
     let name = output.name();
     info!("Starting surface thread for {}", name);
@@ -601,6 +608,7 @@ fn surface_thread(
         },
         output,
         shell,
+        seat,
         frame_callback_seq: 0,
         loop_handle: event_loop.handle(),
         clock,
@@ -1060,9 +1068,11 @@ impl SurfaceThreadState {
         // this avoids duplicate cursors when outputs overlap at the same position
         // TODO: once we have proper multi-monitor positioning, check for cursor rect overlap instead
         let cursor_elements = if output_rect.contains(cursor_position.to_i32_round()) {
-            // create a cursor state for rendering
-            // TODO: share cursor state properly between threads
-            let mut cursor_state = crate::backend::render::cursor::CursorStateInner::default();
+            // get cursor state from seat user data
+            let cursor_state = self.seat.user_data()
+                .get::<crate::backend::render::cursor::CursorState>()
+                .unwrap();
+            let mut cursor_state_ref = cursor_state.lock().unwrap();
             
             // get current time for animated cursors
             let now = self.clock.now();
@@ -1073,7 +1083,7 @@ impl SurfaceThreadState {
             
             cursor::draw_cursor(
                 &mut renderer,
-                &mut cursor_state,
+                &mut *cursor_state_ref,
                 &cursor_status,
                 relative_pos,
                 self.output.current_scale().fractional_scale().into(),
