@@ -19,7 +19,10 @@ use smithay::{
         compositor::CompositorState,
         output::OutputManagerState,
         presentation::PresentationState,
-        selection::data_device::DataDeviceState,
+        selection::{
+            data_device::DataDeviceState,
+            primary_selection::PrimarySelectionState,
+        },
         shell::{
             xdg::{XdgShellState, ToplevelSurface},
             wlr_layer::WlrLayerShellState,
@@ -28,6 +31,10 @@ use smithay::{
         viewporter::ViewporterState,
         pointer_gestures::PointerGesturesState,
         relative_pointer::RelativePointerManagerState,
+        text_input::TextInputManagerState,
+        xdg_activation::XdgActivationState,
+        fractional_scale::FractionalScaleManagerState,
+        cursor_shape::CursorShapeManagerState,
     },
     reexports::{
         calloop::{LoopHandle, LoopSignal},
@@ -77,6 +84,16 @@ pub struct State {
     pub pointer_gestures_state: PointerGesturesState,
     #[allow(dead_code)]
     pub relative_pointer_manager_state: RelativePointerManagerState,
+    #[allow(dead_code)]
+    pub text_input_manager_state: TextInputManagerState,
+    #[allow(dead_code)]
+    pub primary_selection_state: PrimarySelectionState,
+    #[allow(dead_code)]
+    pub xdg_activation_state: XdgActivationState,
+    #[allow(dead_code)]
+    pub fractional_scale_manager_state: FractionalScaleManagerState,
+    #[allow(dead_code)]
+    pub cursor_shape_manager_state: CursorShapeManagerState,
 }
 
 // suppress warnings for now - we'll use these soon
@@ -138,6 +155,11 @@ impl State {
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let pointer_gestures_state = PointerGesturesState::new::<State>(&display_handle);
         let relative_pointer_manager_state = RelativePointerManagerState::new::<State>(&display_handle);
+        let text_input_manager_state = TextInputManagerState::new::<State>(&display_handle);
+        let primary_selection_state = PrimarySelectionState::new::<State>(&display_handle);
+        let xdg_activation_state = XdgActivationState::new::<State>(&display_handle);
+        let fractional_scale_manager_state = FractionalScaleManagerState::new::<State>(&display_handle);
+        let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
         
         Self {
             display_handle: display_handle.clone(),
@@ -165,6 +187,11 @@ impl State {
             viewporter_state,
             pointer_gestures_state,
             relative_pointer_manager_state,
+            text_input_manager_state,
+            primary_selection_state,
+            xdg_activation_state,
+            fractional_scale_manager_state,
+            cursor_shape_manager_state,
         }
     }
     

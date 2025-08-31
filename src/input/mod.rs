@@ -25,8 +25,9 @@ use smithay::{
         },
         Seat, SeatState, SeatHandler,
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
     utils::{Point, SERIAL_COUNTER},
+    wayland::selection::{data_device::set_data_device_focus, primary_selection::set_primary_focus},
 };
 use tracing::{debug, info, trace};
 use std::process::Command;
@@ -84,19 +85,24 @@ impl State {
                         serial,
                         time,
                         |state, modifiers, keysym| {
-                            debug!(
-                                "Key press: keycode={:?}, keysym={:?}, modifiers={:?}, state={:?}",
+                            info!(
+                                "Key event: keycode={:?}, keysym={:?}, modifiers={{ctrl:{}, alt:{}, shift:{}, logo:{}}}, state={:?}",
                                 keycode,
                                 keysym.modified_sym(),
-                                modifiers,
+                                modifiers.ctrl,
+                                modifiers.alt,
+                                modifiers.shift,
+                                modifiers.logo,
                                 event.state()
                             );
                             
                             // check if this is a keybinding
                             if let Some(action) = keybindings.check(modifiers, keysym.modified_sym(), event.state()) {
+                                info!("Key INTERCEPTED for action: {:?}", action);
                                 state.handle_action(action);
                                 FilterResult::Intercept(())
                             } else {
+                                info!("Key FORWARDED to client");
                                 // forward to client
                                 FilterResult::Forward
                             }
@@ -529,7 +535,18 @@ impl SeatHandler for State {
         }
     }
     
-    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&Self::KeyboardFocus>) {
-        // we'll handle focus changes when we have windows
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {
+        // Update clipboard focus when keyboard focus changes
+        let client = focused
+            .and_then(|surface| self.display_handle.get_client(surface.id()).ok());
+        set_data_device_focus(&self.display_handle, seat, client.clone());
+        set_primary_focus(&self.display_handle, seat, client);
+    }
+}
+
+// implement TabletSeatHandler for State
+impl smithay::wayland::tablet_manager::TabletSeatHandler for State {
+    fn tablet_tool_image(&mut self, _tool: &smithay::backend::input::TabletToolDescriptor, _image: smithay::input::pointer::CursorImageStatus) {
+        // we don't handle tablet tools yet
     }
 }

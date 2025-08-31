@@ -2,11 +2,15 @@
 
 pub mod handlers;
 pub mod layer_shell;
+pub mod primary_selection;
+pub mod xdg_activation;
+pub mod fractional_scale;
 
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_decoration,
-    delegate_viewporter, delegate_pointer_gestures, delegate_relative_pointer,
+    delegate_viewporter, delegate_pointer_gestures, delegate_relative_pointer, delegate_text_input_manager,
+    delegate_cursor_shape,
     desktop::{Window, WindowSurfaceType, utils::send_frames_surface_tree, space::SpaceElement},
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -432,6 +436,7 @@ delegate_data_device!(State);
 delegate_output!(State);
 delegate_shm!(State);
 delegate_seat!(State);
+delegate_cursor_shape!(State);
 delegate_xdg_shell!(State);
 delegate_presentation!(State);
 
@@ -439,5 +444,6 @@ delegate_presentation!(State);
 delegate_viewporter!(State);
 delegate_pointer_gestures!(State);
 delegate_relative_pointer!(State);
+delegate_text_input_manager!(State);
 
 // we already implement SeatHandler in input/mod.rs
