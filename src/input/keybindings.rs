@@ -138,13 +138,13 @@ impl Keybindings {
         ));
         
         // system
-        // quit - handle uppercase E when shift is pressed
+        // quit - Super+Shift+e
         bindings.push(Keybinding::new(
             ModifiersState {
                 shift: true,
                 ..modkey
             },
-            xkb::KEY_E,  // uppercase when shift is pressed
+            xkb::KEY_e,  // lowercase e, since we now use raw_latin_sym_or_raw_current_sym
             Action::Quit,
         ));
         

@@ -649,7 +649,7 @@ impl Shell {
         }
     }
     
-    /// Focus the next window in the stack
+    /// Focus the next window in visual/tiling order (like dwm/dwl)
     pub fn focus_next(&mut self, output: &Output) {
         // Get workspace name for the output
         let workspace_name = match self.active_workspaces.get(output).cloned() {
@@ -657,8 +657,8 @@ impl Shell {
             None => return,
         };
         
-        // Get info we need from workspace
-        let (_focus_stack_len, _current_pos, next_window) = {
+        // Get next window in visual order
+        let next_window = {
             let workspace = match self.workspaces.get_mut(&workspace_name) {
                 Some(ws) => ws,
                 None => return,
@@ -667,30 +667,38 @@ impl Shell {
             // clean up dead windows first
             workspace.refresh();
             
-            let stack_len = workspace.focus_stack.len();
-            tracing::debug!("focus_next called. Focus stack size: {}, current focused: {:?}", 
-                stack_len, self.focused_window.is_some());
-                
-            if stack_len <= 1 {
-                tracing::debug!("Not enough windows to cycle");
+            // Get tiled windows only (non-floating)
+            let tiled_windows: Vec<&Window> = workspace.windows.iter()
+                .filter(|w| !workspace.floating_windows.contains(w))
+                .collect();
+            
+            if tiled_windows.is_empty() {
+                tracing::debug!("No tiled windows to cycle");
                 return;
             }
             
+            if tiled_windows.len() == 1 {
+                tracing::debug!("Only one tiled window, nothing to cycle");
+                return;
+            }
+            
+            // Find current window position in visual order
             let current_pos = self.focused_window.as_ref()
-                .and_then(|focused| workspace.focus_stack.iter().position(|w| w == focused));
+                .and_then(|focused| tiled_windows.iter().position(|w| *w == focused));
             
             let next_window = if let Some(pos) = current_pos {
-                let next_pos = (pos + 1) % stack_len;
-                tracing::debug!("Switching focus from position {} to {} (of {})", pos, next_pos, stack_len);
-                Some(workspace.focus_stack[next_pos].clone())
-            } else if !workspace.focus_stack.is_empty() {
-                tracing::debug!("Focused window not in stack, focusing first");
-                Some(workspace.focus_stack[0].clone())
+                // Move to next window, wrapping around
+                let next_pos = (pos + 1) % tiled_windows.len();
+                tracing::debug!("Switching focus from position {} to {} (of {} tiled windows)", 
+                    pos, next_pos, tiled_windows.len());
+                Some(tiled_windows[next_pos].clone())
             } else {
-                None
+                // No current focus or focused window is floating, focus first tiled window
+                tracing::debug!("Focusing first tiled window");
+                Some(tiled_windows[0].clone())
             };
             
-            (stack_len, current_pos, next_window)
+            next_window
         };
         
         // Update focus
@@ -703,7 +711,7 @@ impl Shell {
         }
     }
     
-    /// Focus the previous window in the stack
+    /// Focus the previous window in visual/tiling order (like dwm/dwl)
     pub fn focus_prev(&mut self, output: &Output) {
         // Get workspace name for the output
         let workspace_name = match self.active_workspaces.get(output).cloned() {
@@ -711,7 +719,7 @@ impl Shell {
             None => return,
         };
         
-        // Get info we need from workspace
+        // Get previous window in visual order
         let prev_window = {
             let workspace = match self.workspaces.get_mut(&workspace_name) {
                 Some(ws) => ws,
@@ -721,24 +729,38 @@ impl Shell {
             // clean up dead windows first
             workspace.refresh();
             
-            let stack_len = workspace.focus_stack.len();
-            if stack_len <= 1 {
+            // Get tiled windows only (non-floating)
+            let tiled_windows: Vec<&Window> = workspace.windows.iter()
+                .filter(|w| !workspace.floating_windows.contains(w))
+                .collect();
+            
+            if tiled_windows.is_empty() {
+                tracing::debug!("No tiled windows to cycle");
                 return;
             }
             
-            let current_pos = self.focused_window.as_ref()
-                .and_then(|focused| workspace.focus_stack.iter().position(|w| w == focused));
-            
-            if let Some(pos) = current_pos {
-                let prev_pos = if pos == 0 { stack_len - 1 } else { pos - 1 };
-                tracing::debug!("Switching focus from position {} to {} (of {})", pos, prev_pos, stack_len);
-                Some(workspace.focus_stack[prev_pos].clone())
-            } else if !workspace.focus_stack.is_empty() {
-                tracing::debug!("Focused window not in stack, focusing last");
-                Some(workspace.focus_stack[stack_len - 1].clone())
-            } else {
-                None
+            if tiled_windows.len() == 1 {
+                tracing::debug!("Only one tiled window, nothing to cycle");
+                return;
             }
+            
+            // Find current window position in visual order
+            let current_pos = self.focused_window.as_ref()
+                .and_then(|focused| tiled_windows.iter().position(|w| *w == focused));
+            
+            let prev_window = if let Some(pos) = current_pos {
+                // Move to previous window, wrapping around
+                let prev_pos = if pos == 0 { tiled_windows.len() - 1 } else { pos - 1 };
+                tracing::debug!("Switching focus from position {} to {} (of {} tiled windows)", 
+                    pos, prev_pos, tiled_windows.len());
+                Some(tiled_windows[prev_pos].clone())
+            } else {
+                // No current focus or focused window is floating, focus last tiled window
+                tracing::debug!("Focusing last tiled window");
+                Some(tiled_windows[tiled_windows.len() - 1].clone())
+            };
+            
+            prev_window
         };
         
         // Update focus
