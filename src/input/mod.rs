@@ -554,31 +554,67 @@ impl State {
             
             // workspace management
             SwitchToWorkspace(name) => {
-                if let Some(output) = self.outputs.first() {
-                    let mut shell = self.shell.write().unwrap();
-                    shell.switch_to_workspace(output, name);
-                    drop(shell);
-                    self.backend.schedule_render(output);
+                if let Some(output) = self.outputs.first().cloned() {
+                    // Switch workspace and get the focused window
+                    let focused_window = {
+                        let mut shell = self.shell.write().unwrap();
+                        shell.switch_to_workspace(&output, name);
+                        shell.focused_window.clone()
+                    }; // shell lock dropped here
+                    
+                    // Now update keyboard focus
+                    if let Some(window) = focused_window {
+                        if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone()) {
+                            let keyboard = self.seat.get_keyboard().unwrap();
+                            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                            keyboard.set_focus(self, Some(surface), serial);
+                            tracing::debug!("Updated keyboard focus after workspace switch");
+                        }
+                    } else {
+                        // Clear keyboard focus when no window is focused
+                        let keyboard = self.seat.get_keyboard().unwrap();
+                        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                        keyboard.set_focus(self, None, serial);
+                        tracing::debug!("Cleared keyboard focus after workspace switch");
+                    }
+                    
+                    self.backend.schedule_render(&output);
                 }
             }
             MoveToWorkspace(name) => {
-                if let Some(output) = self.outputs.first() {
-                    let mut shell = self.shell.write().unwrap();
+                if let Some(output) = self.outputs.first().cloned() {
+                    // Move window and get the focused window
+                    let focused_window = {
+                        let mut shell = self.shell.write().unwrap();
+                        
+                        // Get the focused window
+                        if let Some(window) = shell.focused_window.clone() {
+                            // Remove window from current workspace
+                            shell.remove_window(&window);
+                            
+                            // Switch to target workspace
+                            shell.switch_to_workspace(&output, name.clone());
+                            
+                            // Add window to new workspace
+                            shell.add_window(window.clone(), &output);
+                            
+                            Some(window)
+                        } else {
+                            None
+                        }
+                    }; // shell lock dropped here
                     
-                    // Get the focused window
-                    if let Some(window) = shell.focused_window.clone() {
-                        // Remove window from current workspace
-                        shell.remove_window(&window);
-                        
-                        // Switch to target workspace
-                        shell.switch_to_workspace(output, name.clone());
-                        
-                        // Add window to new workspace
-                        shell.add_window(window, output);
+                    // Update keyboard focus to ensure it follows the moved window
+                    if let Some(window) = focused_window {
+                        if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone()) {
+                            let keyboard = self.seat.get_keyboard().unwrap();
+                            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                            keyboard.set_focus(self, Some(surface), serial);
+                            tracing::debug!("Updated keyboard focus after moving window to workspace");
+                        }
                     }
                     
-                    drop(shell);
-                    self.backend.schedule_render(output);
+                    self.backend.schedule_render(&output);
                 }
             }
             

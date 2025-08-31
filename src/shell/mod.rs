@@ -104,7 +104,6 @@ impl Shell {
             let floating = should_float_impl(&window);
             
             workspace.add_window(window.clone(), floating);
-            workspace.append_focus(&window);
             
             let windows_count = workspace.windows.len();
             tracing::debug!("Window added successfully to workspace {}. Total windows in workspace: {}", 
@@ -703,10 +702,6 @@ impl Shell {
         
         // Update focus
         if let Some(next_window) = next_window {
-            // Update workspace focus stack
-            if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
-                workspace.append_focus(&next_window);
-            }
             self.set_focus(next_window);
         }
     }
@@ -765,10 +760,6 @@ impl Shell {
         
         // Update focus
         if let Some(prev_window) = prev_window {
-            // Update workspace focus stack
-            if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
-                workspace.append_focus(&prev_window);
-            }
             self.set_focus(prev_window);
             tracing::debug!("Focused previous window");
         }
@@ -817,7 +808,15 @@ impl Shell {
     
     /// Set keyboard focus to a window
     pub fn set_focus(&mut self, window: Window) {
-        self.focused_window = Some(window);
+        self.focused_window = Some(window.clone());
+        
+        // Update the focus stack in the window's workspace
+        for workspace in self.workspaces.values_mut() {
+            if workspace.windows.contains(&window) {
+                workspace.append_focus(&window);
+                break;
+            }
+        }
     }
     
     // ========== Workspace Management ==========
