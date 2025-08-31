@@ -44,6 +44,12 @@ pub struct Shell {
     /// Geometry to restore when exiting fullscreen
     pub fullscreen_restore: Option<Rectangle<i32, Logical>>,
     
+    /// Index in focus stack to restore when exiting fullscreen
+    pub fullscreen_restore_index: Option<usize>,
+    
+    /// Window that just exited fullscreen (used for restoring position)
+    pub just_unfullscreened: Option<Window>,
+    
     /// Cursor position (relative to space origin)
     pub cursor_position: Point<f64, Logical>,
     
@@ -69,6 +75,8 @@ impl Shell {
             focused_window: None,
             fullscreen_window: None,
             fullscreen_restore: None,
+            fullscreen_restore_index: None,
+            just_unfullscreened: None,
             // start cursor off-screen to avoid rendering on all outputs at startup
             cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
@@ -270,10 +278,24 @@ impl Shell {
             if let Some(geometry) = self.space.element_geometry(&window) {
                 self.fullscreen_restore = Some(geometry);
             }
+            
+            // store window's position in the tiling order
+            // we need to find it in space.elements() as that's what arrange() uses
+            let elements: Vec<_> = self.space.elements()
+                .filter(|w| !self.floating_windows.contains(w))
+                .cloned()
+                .collect();
+            
+            if let Some(index) = elements.iter().position(|w| w == &window) {
+                self.fullscreen_restore_index = Some(index);
+                tracing::info!("Storing fullscreen restore index: {}", index);
+            }
+            
             self.fullscreen_window = Some(window);
         } else if self.fullscreen_window.as_ref() == Some(&window) {
             self.fullscreen_window = None;
-            // geometry will be restored by the caller using take_fullscreen_restore()
+            self.just_unfullscreened = Some(window);
+            // geometry and index will be restored by arrange()
         }
     }
     
@@ -456,13 +478,83 @@ impl Shell {
     pub fn arrange(&mut self) {
         tracing::info!("arrange() called");
         
+        // handle fullscreen window first
+        if let Some(fullscreen_window) = self.fullscreen_window.as_ref() {
+            // get the output size for fullscreen
+            let output = self.space.outputs().next();
+            if let Some(output) = output {
+                let output_size = output.current_mode()
+                    .map(|mode| {
+                        let scale = output.current_scale().fractional_scale();
+                        Size::from((
+                            (mode.size.w as f64 / scale) as i32,
+                            (mode.size.h as f64 / scale) as i32,
+                        ))
+                    })
+                    .unwrap_or_else(|| (1920, 1080).into());
+                
+                // position fullscreen window at origin with full output size
+                self.space.map_element(fullscreen_window.clone(), Point::from((0, 0)), false);
+                
+                if let Some(toplevel) = fullscreen_window.toplevel() {
+                    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                    
+                    toplevel.with_pending_state(|state| {
+                        state.size = Some(output_size);
+                        state.bounds = Some(output_size);
+                        state.states.set(State::Fullscreen);
+                        
+                        // remove tiled states
+                        state.states.unset(State::TiledLeft);
+                        state.states.unset(State::TiledRight);
+                        state.states.unset(State::TiledTop);
+                        state.states.unset(State::TiledBottom);
+                    });
+                    
+                    if toplevel.is_initial_configure_sent() {
+                        toplevel.send_configure();
+                    }
+                }
+                
+                tracing::info!("Positioned fullscreen window at full output size: {:?}", output_size);
+            }
+        }
+        
         // collect windows to tile (non-floating, non-fullscreen)
         let mut windows_to_tile = Vec::new();
+        
+        // check if we have a window that just exited fullscreen
+        let unfullscreened_window = self.just_unfullscreened.take();
+        if unfullscreened_window.is_some() {
+            tracing::info!("Window just exited fullscreen, restore index: {:?}", self.fullscreen_restore_index);
+        }
+        
         for window in self.space.elements() {
             if !self.floating_windows.contains(window) 
                 && self.fullscreen_window.as_ref() != Some(window) {
+                // skip the unfullscreened window for now
+                if unfullscreened_window.as_ref() == Some(window) {
+                    continue;
+                }
                 windows_to_tile.push(window.clone());
             }
+        }
+        
+        // if we have a window that just exited fullscreen, insert it at the saved position
+        if let Some(window) = unfullscreened_window {
+            if let Some(index) = self.fullscreen_restore_index.take() {
+                // clamp index to valid range in case windows were closed
+                let insert_pos = index.min(windows_to_tile.len());
+                windows_to_tile.insert(insert_pos, window.clone());
+                tracing::info!("Restored unfullscreened window to position {}", insert_pos);
+            } else {
+                // no saved index, add it at the end
+                windows_to_tile.push(window.clone());
+                tracing::info!("No restore index, added unfullscreened window at end");
+            }
+            
+            // clear the restore geometry as we've handled it
+            self.fullscreen_restore = None;
         }
         
         // get tile positions

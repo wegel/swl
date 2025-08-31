@@ -123,6 +123,7 @@ impl CompositorHandler for State {
                     if is_fullscreen {
                         tracing::debug!("Window is fullscreen, updating shell state");
                         shell.set_fullscreen(window.clone(), true);
+                        shell.arrange();  // Re-arrange to position fullscreen window
                     }
                     drop(shell); // release lock before setting keyboard focus
                     
@@ -364,6 +365,7 @@ impl XdgShellHandler for State {
             if let Some(window) = window {
                 debug!("Found window, updating shell fullscreen state");
                 shell.set_fullscreen(window, true);
+                shell.arrange();  // Re-arrange to position fullscreen window
             } else {
                 debug!("Window not yet mapped - fullscreen state will be applied when window is created");
                 // the window will pick up the fullscreen state when it's created
@@ -396,6 +398,7 @@ impl XdgShellHandler for State {
             surface.send_configure();
             
             shell.set_fullscreen(window, false);
+            shell.arrange();  // Re-arrange to return window to tiled position
         }
     }
     
