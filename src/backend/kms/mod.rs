@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use smithay::{
     backend::{
+        allocator::{dmabuf::Dmabuf, Buffer},
         drm::{DrmDeviceFd, DrmNode},
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
@@ -25,12 +26,13 @@ use smithay::{
         input::{self, Libinput},
         wayland_server::DisplayHandle,
     },
+    wayland::dmabuf::DmabufGlobal,
 };
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 pub use self::device::Device;
 
@@ -51,6 +53,53 @@ impl KmsState {
         for device in self.drm_devices.values() {
             device.schedule_render(output);
         }
+    }
+    
+    /// Import a dmabuf and verify it can be used
+    pub fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: Dmabuf,
+    ) -> Result<DrmNode> {
+        // Find device with EGL support to validate the dmabuf
+        let mut last_err = anyhow::anyhow!("No device with EGL support found");
+        
+        for (node, device) in &self.drm_devices {
+            if let Some(ref egl) = device.egl {
+                // Check if the format is supported
+                if !egl.display.dmabuf_texture_formats().contains(&dmabuf.format()) {
+                    trace!(
+                        "Skipping import of dmabuf on {:?}: unsupported format {:?}",
+                        node,
+                        dmabuf.format()
+                    );
+                    continue;
+                }
+                
+                // Try to create an EGL image to validate the dmabuf
+                match egl.display.create_image_from_dmabuf(&dmabuf) {
+                    Ok(image) => {
+                        // Successfully imported - destroy the test image
+                        unsafe {
+                            smithay::backend::egl::ffi::egl::DestroyImageKHR(
+                                **egl.display.get_display_handle(),
+                                image,
+                            );
+                        }
+                        return Ok(device.render_node.clone());
+                    }
+                    Err(err) => {
+                        debug!(
+                            "Failed to import dmabuf on {:?}: {:?}",
+                            node, err
+                        );
+                        last_err = anyhow::anyhow!("Failed to import dmabuf: {:?}", err);
+                    }
+                }
+            }
+        }
+        
+        Err(last_err)
     }
 }
 

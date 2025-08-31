@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+pub mod dmabuf;
+
 use smithay::{
     reexports::wayland_server::backend::ClientData,
     wayland::compositor::CompositorClientState,

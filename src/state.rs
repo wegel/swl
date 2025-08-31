@@ -17,6 +17,7 @@ use smithay::{
     output::Output,
     wayland::{
         compositor::CompositorState,
+        dmabuf::{DmabufState, DmabufFeedbackBuilder},
         output::OutputManagerState,
         presentation::PresentationState,
         selection::{
@@ -66,6 +67,8 @@ pub struct State {
     pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
     pub data_device_state: DataDeviceState,
+    pub dmabuf_state: DmabufState,
+    pub dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
     #[allow(dead_code)] // will be used for output configuration protocol
     pub output_manager_state: OutputManagerState,
     #[allow(dead_code)] // used by presentation feedback protocol
@@ -129,6 +132,7 @@ impl State {
         let layer_shell_state = WlrLayerShellState::new::<State>(&display_handle);
         let shm_state = ShmState::new::<State>(&display_handle, vec![]);
         let data_device_state = DataDeviceState::new::<State>(&display_handle);
+        let dmabuf_state = DmabufState::new();
         let output_manager_state = OutputManagerState::new_with_xdg_output::<State>(&display_handle);
         
         // create seat state and the default seat
@@ -178,6 +182,8 @@ impl State {
             layer_shell_state,
             shm_state,
             data_device_state,
+            dmabuf_state,
+            dmabuf_global: None,
             output_manager_state,
             presentation_state,
             shell,
@@ -298,8 +304,35 @@ impl State {
                 }
                 
                 // update EGL and add to GPU manager if needed
-                if let Err(err) = device.update_egl(kms.primary_gpu.as_ref(), &mut kms.gpu_manager) {
+                let should_create_dmabuf = if let Err(err) = device.update_egl(kms.primary_gpu.as_ref(), &mut kms.gpu_manager) {
                     tracing::warn!("Failed to initialize EGL for device {:?}: {}", drm_node, err);
+                    false
+                } else {
+                    device.egl.is_some() && self.dmabuf_global.is_none()
+                };
+                
+                // Create dmabuf global if needed (do this before scan_outputs to avoid borrow conflicts)
+                if should_create_dmabuf {
+                    // Extract needed info from device
+                    let render_node = device.render_node.clone();
+                    let formats = device.egl.as_ref().unwrap().display.dmabuf_texture_formats();
+                    
+                    // Create dmabuf feedback
+                    if let Ok(feedback) = DmabufFeedbackBuilder::new(render_node.dev_id(), formats.clone()).build() {
+                        // Create the global and store it
+                        let global = self.dmabuf_state
+                            .create_global_with_default_feedback::<State>(&self.display_handle, &feedback);
+                        
+                        self.dmabuf_global = Some(global);
+                        
+                        tracing::info!(
+                            "Created dmabuf global for device {:?} with {} formats",
+                            render_node,
+                            formats.indexset().len()
+                        );
+                    } else {
+                        tracing::warn!("Failed to create dmabuf feedback");
+                    }
                 }
                 
                 // scan for connected outputs
@@ -372,4 +405,5 @@ impl State {
         
         Ok(())
     }
+    
 }
