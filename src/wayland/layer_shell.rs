@@ -45,12 +45,18 @@ impl WlrLayerShellHandler for State {
             layer_map.map_layer(&layer_surface).unwrap();
             
             // arrange layers to compute proper geometry
-            layer_map.arrange();
+            let changed = layer_map.arrange();
             
             // now send configure with the computed dimensions
             layer_surface.layer_surface().send_configure();
             
             debug!("Layer surface mapped to output {}", output.name());
+            
+            // if layer arrangement changed (e.g. new exclusive zone), re-arrange windows
+            if changed {
+                debug!("Layer arrangement changed, re-arranging windows");
+                self.shell.write().unwrap().arrange();
+            }
             
             // keyboard focus will be handled in commit handler when the surface is ready
             
@@ -79,6 +85,13 @@ impl WlrLayerShellHandler for State {
                 let layer = layer.clone();
                 map.unmap_layer(&layer);
                 info!("Layer surface unmapped from output {}", output.name());
+            }
+            
+            // re-arrange layers and windows if exclusive zones changed
+            let changed = map.arrange();
+            if changed {
+                debug!("Layer arrangement changed after unmap, re-arranging windows");
+                self.shell.write().unwrap().arrange();
             }
             
             // schedule render for the output

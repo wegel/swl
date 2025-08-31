@@ -172,27 +172,9 @@ impl Keybindings {
             return None;
         }
         
-        tracing::info!("Checking {} keybindings for key={} modifiers={{ctrl:{}, alt:{}, shift:{}, logo:{}}}",
-            self.bindings.len(),
-            key.raw(),
-            modifiers.ctrl,
-            modifiers.alt,
-            modifiers.shift,
-            modifiers.logo
-        );
-        
         for binding in &self.bindings {
-            let binding_mods = &binding.modifiers;
-            tracing::info!("  Checking binding: key={} mods={{ctrl:{}, alt:{}, shift:{}, logo:{}}}",
-                binding.key,
-                binding_mods.ctrl,
-                binding_mods.alt,
-                binding_mods.shift,
-                binding_mods.logo
-            );
-            
             if binding.matches(modifiers, key) {
-                tracing::info!("  -> MATCHED! Action: {:?}", binding.action);
+                tracing::debug!("Keybinding matched: {:?}", binding.action);
                 return Some(binding.action);
             }
         }

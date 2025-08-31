@@ -76,6 +76,8 @@ impl CompositorHandler for State {
                 let changed = layer_map.arrange();
                 if changed {
                     tracing::debug!("Layer arrangement changed after commit");
+                    // re-arrange windows to respect new exclusive zones
+                    self.shell.write().unwrap().arrange();
                 }
                 
                 if wants_focus {

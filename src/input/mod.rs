@@ -85,24 +85,12 @@ impl State {
                         serial,
                         time,
                         |state, modifiers, keysym| {
-                            info!(
-                                "Key event: keycode={:?}, keysym={:?}, modifiers={{ctrl:{}, alt:{}, shift:{}, logo:{}}}, state={:?}",
-                                keycode,
-                                keysym.modified_sym(),
-                                modifiers.ctrl,
-                                modifiers.alt,
-                                modifiers.shift,
-                                modifiers.logo,
-                                event.state()
-                            );
-                            
                             // check if this is a keybinding
                             if let Some(action) = keybindings.check(modifiers, keysym.modified_sym(), event.state()) {
-                                info!("Key INTERCEPTED for action: {:?}", action);
+                                trace!("Key intercepted for action: {:?}", action);
                                 state.handle_action(action);
                                 FilterResult::Intercept(())
                             } else {
-                                info!("Key FORWARDED to client");
                                 // forward to client
                                 FilterResult::Forward
                             }
@@ -429,6 +417,13 @@ impl State {
             Zoom => {
                 let mut shell = self.shell.write().unwrap();
                 shell.zoom();
+                let needs_render = shell.needs_arrange;
+                drop(shell);
+                if needs_render {
+                    for output in self.outputs.clone() {
+                        self.backend.schedule_render(&output);
+                    }
+                }
             }
             CloseWindow => {
                 let mut shell = self.shell.write().unwrap();
@@ -439,6 +434,13 @@ impl State {
                 if let Some(window) = shell.focused_window.clone() {
                     shell.toggle_floating(&window);
                 }
+                let needs_render = shell.needs_arrange;
+                drop(shell);
+                if needs_render {
+                    for output in self.outputs.clone() {
+                        self.backend.schedule_render(&output);
+                    }
+                }
             }
             
             // layout control
@@ -446,28 +448,44 @@ impl State {
                 {
                     let mut shell = self.shell.write().unwrap();
                     shell.tiling.set_master_factor(0.05);
-                    shell.arrange();
+                    shell.needs_arrange = true;
+                }
+                // schedule render on all outputs
+                for output in self.outputs.clone() {
+                    self.backend.schedule_render(&output);
                 }
             }
             DecreaseMasterWidth => {
                 {
                     let mut shell = self.shell.write().unwrap();
                     shell.tiling.set_master_factor(-0.05);
-                    shell.arrange();
+                    shell.needs_arrange = true;
+                }
+                // schedule render on all outputs
+                for output in self.outputs.clone() {
+                    self.backend.schedule_render(&output);
                 }
             }
             IncreaseMasterCount => {
                 {
                     let mut shell = self.shell.write().unwrap();
                     shell.tiling.inc_n_master(1);
-                    shell.arrange();
+                    shell.needs_arrange = true;
+                }
+                // schedule render on all outputs
+                for output in self.outputs.clone() {
+                    self.backend.schedule_render(&output);
                 }
             }
             DecreaseMasterCount => {
                 {
                     let mut shell = self.shell.write().unwrap();
                     shell.tiling.inc_n_master(-1);
-                    shell.arrange();
+                    shell.needs_arrange = true;
+                }
+                // schedule render on all outputs
+                for output in self.outputs.clone() {
+                    self.backend.schedule_render(&output);
                 }
             }
             

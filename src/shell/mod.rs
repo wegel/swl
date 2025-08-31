@@ -64,6 +64,9 @@ pub struct Shell {
     
     /// Ordered list of windows for focus cycling
     pub focus_stack: Vec<Window>,
+    
+    /// Flag indicating that windows need to be re-arranged
+    pub needs_arrange: bool,
 }
 
 impl Shell {
@@ -80,9 +83,10 @@ impl Shell {
             // start cursor off-screen to avoid rendering on all outputs at startup
             cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
-            tiling: TilingLayout::new((1920, 1080).into()), // default size, will be updated
+            tiling: TilingLayout::new(Rectangle::from_size(Size::from((1920, 1080)))), // default area, will be updated
             floating_windows: HashSet::new(),
             focus_stack: Vec::new(),
+            needs_arrange: false,
         }
     }
     
@@ -91,16 +95,11 @@ impl Shell {
         // map the output at origin (we don't support multi-monitor positioning yet)
         self.space.map_output(output, Point::from((0, 0)));
         
-        // update tiling layout with output size
-        if let Some(mode) = output.current_mode() {
-            // convert physical size to logical
-            let scale = output.current_scale().fractional_scale();
-            let logical_size = Size::from((
-                (mode.size.w as f64 / scale) as i32,
-                (mode.size.h as f64 / scale) as i32,
-            ));
-            self.tiling.set_output_size(logical_size);
-        }
+        // update tiling layout with available area (non-exclusive zone)
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        let available_area = layer_map.non_exclusive_zone();
+        self.tiling.set_available_area(available_area);
+        tracing::debug!("Initial available area for output {}: {:?}", output.name(), available_area);
         
         tracing::info!("Added output {} to shell space", output.name());
     }
@@ -121,18 +120,18 @@ impl Shell {
         let window_geometry = window.geometry();
         let window_size = window_geometry.size;
         
-        tracing::info!("Output mode: {:?}, Output size: {:?}", output_mode, output_size);
-        tracing::info!("Window geometry: {:?}, Window size: {:?}", window_geometry, window_size);
+        tracing::debug!("Output mode: {:?}, Output size: {:?}", output_mode, output_size);
+        tracing::debug!("Window geometry: {:?}, Window size: {:?}", window_geometry, window_size);
         
-        // map window to a temporary location first, then arrange
+        // map window to a temporary location first, then mark for arrangement
         self.space.map_element(window.clone(), Point::from((0, 0)), false);
-        self.arrange();
+        self.needs_arrange = true;
         
         // add to focus stack and set as focused
         self.append_focus(window.clone());
         tracing::debug!("Set window {} as focused", id);
         
-        tracing::info!("Window {} added successfully. Total windows: {}", id, self.windows.len());
+        tracing::debug!("Window {} added successfully. Total windows: {}", id, self.windows.len());
     }
     
     /// Get the window under the given point
@@ -476,8 +475,6 @@ impl Shell {
     
     /// Arrange windows according to the current tiling layout
     pub fn arrange(&mut self) {
-        tracing::info!("arrange() called");
-        
         // handle fullscreen window first
         if let Some(fullscreen_window) = self.fullscreen_window.as_ref() {
             // get the output size for fullscreen
@@ -516,9 +513,21 @@ impl Shell {
                     }
                 }
                 
-                tracing::info!("Positioned fullscreen window at full output size: {:?}", output_size);
+                tracing::debug!("Positioned fullscreen window at full output size: {:?}", output_size);
             }
         }
+        
+        // get the non-exclusive zone for tiling
+        let available_area = if let Some(output) = self.space.outputs().next() {
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            layer_map.non_exclusive_zone()
+        } else {
+            // fallback to full screen if no output
+            Rectangle::from_size(Size::from((1920, 1080)))
+        };
+        
+        // update tiling layout with the available area
+        self.tiling.set_available_area(available_area);
         
         // collect windows to tile (non-floating, non-fullscreen)
         let mut windows_to_tile = Vec::new();
@@ -526,7 +535,7 @@ impl Shell {
         // check if we have a window that just exited fullscreen
         let unfullscreened_window = self.just_unfullscreened.take();
         if unfullscreened_window.is_some() {
-            tracing::info!("Window just exited fullscreen, restore index: {:?}", self.fullscreen_restore_index);
+            tracing::debug!("Window just exited fullscreen, restore index: {:?}", self.fullscreen_restore_index);
         }
         
         for window in self.space.elements() {
@@ -546,11 +555,11 @@ impl Shell {
                 // clamp index to valid range in case windows were closed
                 let insert_pos = index.min(windows_to_tile.len());
                 windows_to_tile.insert(insert_pos, window.clone());
-                tracing::info!("Restored unfullscreened window to position {}", insert_pos);
+                tracing::debug!("Restored unfullscreened window to position {}", insert_pos);
             } else {
                 // no saved index, add it at the end
                 windows_to_tile.push(window.clone());
-                tracing::info!("No restore index, added unfullscreened window at end");
+                tracing::debug!("No restore index, added unfullscreened window at end");
             }
             
             // clear the restore geometry as we've handled it
@@ -595,7 +604,7 @@ impl Shell {
             }
         }
         
-        tracing::info!("Arranged {} windows", windows_to_tile.len());
+        tracing::debug!("Arranged {} windows", windows_to_tile.len());
         
         // no need to send frame callbacks here - the render loop will handle that
     }
@@ -630,7 +639,7 @@ impl Shell {
             
             tracing::debug!("Window set to floating");
         }
-        self.arrange();
+        self.needs_arrange = true;
     }
     
     /// Zoom - swap focused window with first master window
@@ -641,7 +650,7 @@ impl Shell {
                 if pos > 0 {
                     // swap with first window
                     self.focus_stack.swap(0, pos);
-                    self.arrange();
+                    self.needs_arrange = true;
                     tracing::debug!("Zoomed window to master");
                 }
             }

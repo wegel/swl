@@ -2,7 +2,7 @@
 
 use smithay::{
     desktop::Window,
-    utils::{Logical, Rectangle, Size},
+    utils::{Logical, Rectangle},
 };
 use tracing::debug;
 
@@ -15,13 +15,13 @@ pub struct TilingLayout {
     /// Number of windows in master area
     n_master: usize,
     
-    /// Size of the output we're tiling on
-    output_size: Size<i32, Logical>,
+    /// Available area for tiling (excluding exclusive zones)
+    available_area: Rectangle<i32, Logical>,
 }
 
 impl TilingLayout {
     /// Create a new tiling layout with default settings
-    pub fn new(output_size: Size<i32, Logical>) -> Self {
+    pub fn new(available_area: Rectangle<i32, Logical>) -> Self {
         // check environment variables for configuration
         let master_factor = std::env::var("SWL_MASTER_FACTOR")
             .ok()
@@ -34,13 +34,13 @@ impl TilingLayout {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1);
         
-        debug!("TilingLayout initialized: master_factor={}, n_master={}", 
-               master_factor, n_master);
+        debug!("TilingLayout initialized: master_factor={}, n_master={}, available_area={:?}", 
+               master_factor, n_master, available_area);
         
         Self {
             master_factor,
             n_master,
-            output_size,
+            available_area,
         }
     }
     
@@ -54,11 +54,17 @@ impl TilingLayout {
         let n = windows.len();
         let mut positions = Vec::with_capacity(n);
         
+        // use the available area's position and size
+        let area_x = self.available_area.loc.x;
+        let area_y = self.available_area.loc.y;
+        let area_width = self.available_area.size.w;
+        let area_height = self.available_area.size.h;
+        
         // calculate master area width
         let master_width = if n > self.n_master {
-            (self.output_size.w as f32 * self.master_factor) as i32
+            (area_width as f32 * self.master_factor) as i32
         } else {
-            self.output_size.w
+            area_width
         };
         
         // tile master windows (left side)
@@ -66,9 +72,9 @@ impl TilingLayout {
         let master_count = n.min(self.n_master);
         
         for i in 0..master_count {
-            let height = (self.output_size.h - master_y) / (master_count - i) as i32;
+            let height = (area_height - master_y) / (master_count - i) as i32;
             let rect = Rectangle::new(
-                (0, master_y).into(),
+                (area_x, area_y + master_y).into(),
                 (master_width, height).into(),
             );
             positions.push((windows[i].clone(), rect));
@@ -77,14 +83,14 @@ impl TilingLayout {
         
         // tile stack windows (right side)
         if n > self.n_master {
-            let stack_width = self.output_size.w - master_width;
+            let stack_width = area_width - master_width;
             let stack_count = n - self.n_master;
             let mut stack_y = 0;
             
             for i in self.n_master..n {
-                let height = (self.output_size.h - stack_y) / (stack_count - (i - self.n_master)) as i32;
+                let height = (area_height - stack_y) / (stack_count - (i - self.n_master)) as i32;
                 let rect = Rectangle::new(
-                    (master_width, stack_y).into(),
+                    (area_x + master_width, area_y + stack_y).into(),
                     (stack_width, height).into(),
                 );
                 positions.push((windows[i].clone(), rect));
@@ -92,7 +98,8 @@ impl TilingLayout {
             }
         }
         
-        debug!("Tiled {} windows (master={}, stack={})", n, master_count, n.saturating_sub(self.n_master));
+        debug!("Tiled {} windows (master={}, stack={}) in area {:?}", 
+               n, master_count, n.saturating_sub(self.n_master), self.available_area);
         positions
     }
     
@@ -112,9 +119,10 @@ impl TilingLayout {
         debug!("Master count adjusted to {}", self.n_master);
     }
     
-    /// Update the output size (for when output changes)
-    pub fn set_output_size(&mut self, size: Size<i32, Logical>) {
-        self.output_size = size;
+    /// Update the available area (for when output or exclusive zones change)
+    pub fn set_available_area(&mut self, area: Rectangle<i32, Logical>) {
+        self.available_area = area;
+        debug!("Available area updated to {:?}", area);
     }
     
     /// Get current master factor
