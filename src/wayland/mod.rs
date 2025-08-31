@@ -15,7 +15,7 @@ use smithay::{
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
-    utils::{Clock, Monotonic},
+    utils::{Clock, Monotonic, Size},
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
@@ -80,7 +80,11 @@ impl CompositorHandler for State {
                 if changed {
                     tracing::debug!("Layer arrangement changed after commit");
                     // mark that windows need to be re-arranged
-                    self.shell.write().unwrap().needs_arrange = true;
+                    let mut shell = self.shell.write().unwrap();
+                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                        workspace.needs_arrange = true;
+                    }
+                    drop(shell);
                     self.backend.schedule_render(output);
                 }
                 
@@ -128,8 +132,7 @@ impl CompositorHandler for State {
                     
                     if is_fullscreen {
                         tracing::debug!("Window is fullscreen, updating shell state");
-                        shell.set_fullscreen(window.clone(), true);
-                        shell.needs_arrange = true;  // Mark for re-arrangement to position fullscreen window
+                        shell.set_fullscreen(window.clone(), true, &output);
                     }
                     drop(shell); // release lock before setting keyboard focus
                     
@@ -272,55 +275,23 @@ impl XdgShellHandler for State {
         let (output, was_focused) = {
             let mut shell = self.shell.write().unwrap();
             
-            // find which output the window is on
-            let output = self.outputs.first().cloned();
-            
             let mut was_focused = false;
+            let mut found_output = None;
             
-            // remove from space
-            if let Some(window) = shell.windows.values().find(|w| {
-                w.toplevel().map_or(false, |t| t == &surface)
-            }).cloned() {
-                shell.space.unmap_elem(&window);
-                
-                // remove from our tracking
-                shell.windows.retain(|_id, w| {
-                    w.toplevel().map_or(true, |t| t != &surface)
-                });
-                
-                // remove from focus stack
-                shell.focus_stack.retain(|w| {
-                    w.toplevel().map_or(true, |t| t != &surface)
-                });
-                
-                // remove from floating windows
-                shell.floating_windows.retain(|w| {
-                    w.toplevel().map_or(true, |t| t != &surface)
-                });
-                
+            // Find the window in any workspace
+            let window_to_remove = shell.space.elements()
+                .find(|w| w.toplevel().map_or(false, |t| t == &surface))
+                .cloned();
+            
+            if let Some(window) = window_to_remove {
                 // check if focused window was destroyed
-                was_focused = shell.focused_window.as_ref().map_or(false, |w| {
-                    w.toplevel().map_or(false, |t| t == &surface)
-                });
+                was_focused = shell.focused_window.as_ref() == Some(&window);
                 
-                // clear focused window if it was destroyed
-                if was_focused {
-                    shell.focused_window = None;
-                }
-                
-                // update fullscreen window if it was destroyed
-                if shell.fullscreen_window.as_ref().map_or(false, |w| {
-                    w.toplevel().map_or(false, |t| t == &surface)
-                }) {
-                    shell.fullscreen_window = None;
-                    shell.fullscreen_restore = None;
-                }
-                
-                // mark for re-arrangement of remaining windows
-                shell.needs_arrange = true;
+                // Remove from all workspaces and get the output it was on
+                found_output = shell.remove_window(&window);
             }
             
-            (output, was_focused)
+            (found_output, was_focused)
         };
         
         // if the destroyed window was focused, clear keyboard focus and mark for refresh
@@ -378,8 +349,10 @@ impl XdgShellHandler for State {
             
             if let Some(window) = window {
                 debug!("Found window, updating shell fullscreen state");
-                shell.set_fullscreen(window, true);
-                shell.arrange();  // Re-arrange to position fullscreen window
+                // Get output for the window
+                if let Some(output) = self.outputs.first() {
+                    shell.set_fullscreen(window, true, output);
+                }
             } else {
                 debug!("Window not yet mapped - fullscreen state will be applied when window is created");
                 // the window will pick up the fullscreen state when it's created
@@ -399,10 +372,8 @@ impl XdgShellHandler for State {
         }).cloned();
         
         if let Some(window) = window {
-            // get the restore geometry before clearing fullscreen state
-            let restore_size = shell.take_fullscreen_restore()
-                .map(|rect| rect.size)
-                .unwrap_or_else(|| (800, 600).into());
+            // use default restore size
+            let restore_size = Size::from((800, 600));
             
             surface.with_pending_state(|state| {
                 state.states.unset(xdg_toplevel::State::Fullscreen);
@@ -411,8 +382,10 @@ impl XdgShellHandler for State {
             });
             surface.send_configure();
             
-            shell.set_fullscreen(window, false);
-            shell.needs_arrange = true;  // Mark for re-arrangement to return window to tiled position
+            // Get output for the window
+            if let Some(output) = self.outputs.first() {
+                shell.set_fullscreen(window, false, output);
+            }
         }
     }
     

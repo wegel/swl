@@ -3,6 +3,7 @@
 use crate::{
     backend::kms::{KmsState, Device},
     backend::render::cursor::{CursorState, CursorStateInner},
+    input::keybindings::Keybindings,
     shell::Shell,
 };
 use std::sync::{Arc, Mutex, RwLock};
@@ -86,6 +87,7 @@ pub struct State {
     pub pending_windows: Vec<(ToplevelSurface, Window)>,
     #[allow(dead_code)] // will be used for server-side cursor rendering
     pub cursor_state: CursorState,
+    pub keybindings: Keybindings,
     session_active: bool,
     pub needs_focus_refresh: bool,
     // Additional protocol support
@@ -198,6 +200,7 @@ impl State {
             outputs: Vec::new(),
             pending_windows: Vec::new(),
             cursor_state: Mutex::new(CursorStateInner::default()),
+            keybindings: Keybindings::new(),
             session_active: false,
             needs_focus_refresh: false,
             viewporter_state,

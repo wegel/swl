@@ -54,8 +54,9 @@ impl WlrLayerShellHandler for State {
             
             // if layer arrangement changed (e.g. new exclusive zone), re-arrange windows
             if changed {
-                debug!("Layer arrangement changed, re-arranging windows");
-                self.shell.write().unwrap().arrange();
+                debug!("Layer arrangement changed, windows will be re-arranged on next render");
+                // Don't call arrange() here as it may cause deadlock
+                // It will be called when the layer surface commits
             }
             
             // keyboard focus will be handled in commit handler when the surface is ready
@@ -88,10 +89,13 @@ impl WlrLayerShellHandler for State {
             }
             
             // re-arrange layers and windows if exclusive zones changed
-            let changed = map.arrange();
-            if changed {
-                debug!("Layer arrangement changed after unmap, re-arranging windows");
-                self.shell.write().unwrap().arrange();
+            map.arrange();
+            
+            // Always mark windows for re-arrangement when a layer surface is destroyed
+            // as it may have had exclusive zones that affected window layout
+            let mut shell = self.shell.write().unwrap();
+            if let Some(workspace) = shell.active_workspace_mut(&output) {
+                workspace.needs_arrange = true;
             }
             
             // schedule render for the output

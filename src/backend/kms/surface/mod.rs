@@ -1054,6 +1054,20 @@ impl SurfaceThreadState {
                 .map_err(|e| anyhow::anyhow!("Failed to get single-gpu renderer: {}", e))?
         };
         
+        // check if windows need to be re-arranged before rendering
+        {
+            let shell = self.shell.write().unwrap();
+            // Check if active workspace needs arrangement
+            if let Some(workspace) = shell.active_workspace(&self.output) {
+                if workspace.needs_arrange {
+                    debug!("Windows need arrangement before render");
+                    drop(shell);
+                    let mut shell = self.shell.write().unwrap();
+                    shell.arrange_windows_on_output(&self.output);
+                }
+            }
+        }
+        
         // collect elements from shell
         let mut elements = {
             let shell = self.shell.read().unwrap();
@@ -1138,7 +1152,7 @@ impl SurfaceThreadState {
         // Phase 4h: Determine if VRR should be active
         let has_fullscreen = {
             let shell = self.shell.read().unwrap();
-            shell.get_fullscreen().is_some()
+            shell.get_fullscreen(&self.output).is_some()
         };
         
         let vrr = match self.vrr_mode {

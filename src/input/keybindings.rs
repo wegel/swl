@@ -7,7 +7,7 @@ use smithay::{
 use tracing::debug;
 
 /// Actions that can be triggered by keybindings
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     // window management
     FocusNext,
@@ -25,6 +25,10 @@ pub enum Action {
     // applications
     LaunchTerminal,
     LaunchMenu,
+    
+    // workspace management
+    SwitchToWorkspace(String),
+    MoveToWorkspace(String),
     
     // system
     Quit,
@@ -144,6 +148,42 @@ impl Keybindings {
             Action::Quit,
         ));
         
+        // Workspace switching - Super+1-9 and Super+0 for workspace 10
+        for i in 1..=9 {
+            bindings.push(Keybinding::new(
+                modkey,
+                xkb::KEY_1 + (i - 1),
+                Action::SwitchToWorkspace(i.to_string()),
+            ));
+        }
+        // Super+0 for workspace 10
+        bindings.push(Keybinding::new(
+            modkey,
+            xkb::KEY_0,
+            Action::SwitchToWorkspace("10".to_string()),
+        ));
+        
+        // Move window to workspace - Super+Shift+1-9 and Super+Shift+0 for workspace 10
+        for i in 1..=9 {
+            bindings.push(Keybinding::new(
+                ModifiersState {
+                    shift: true,
+                    ..modkey
+                },
+                xkb::KEY_1 + (i - 1),
+                Action::MoveToWorkspace(i.to_string()),
+            ));
+        }
+        // Super+Shift+0 for workspace 10
+        bindings.push(Keybinding::new(
+            ModifiersState {
+                shift: true,
+                ..modkey
+            },
+            xkb::KEY_0,
+            Action::MoveToWorkspace("10".to_string()),
+        ));
+        
         debug!("Initialized {} keybindings", bindings.len());
         
         Self { bindings }
@@ -175,7 +215,7 @@ impl Keybindings {
         for binding in &self.bindings {
             if binding.matches(modifiers, key) {
                 tracing::debug!("Keybinding matched: {:?}", binding.action);
-                return Some(binding.action);
+                return Some(binding.action.clone());
             }
         }
         

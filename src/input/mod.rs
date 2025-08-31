@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-mod keybindings;
+pub mod keybindings;
 
 use smithay::{
     backend::input::{
@@ -33,7 +33,7 @@ use tracing::{debug, info, trace};
 use std::process::Command;
 
 use crate::State;
-use self::keybindings::{Keybindings, Action};
+use self::keybindings::Action;
 
 impl State {
     /// Process input events from the backend
@@ -75,9 +75,6 @@ impl State {
                     let keyboard = seat.get_keyboard().unwrap();
                     
                     // process the key input
-                    // check for keybindings
-                    let keybindings = Keybindings::new();
-                    
                     keyboard.input(
                         self,
                         keycode,
@@ -86,7 +83,9 @@ impl State {
                         time,
                         |state, modifiers, keysym| {
                             // check if this is a keybinding
-                            if let Some(action) = keybindings.check(modifiers, keysym.modified_sym(), event.state()) {
+                            // Use raw_latin_sym_or_raw_current_sym() to get the unshifted key for bindings
+                            let key = keysym.raw_latin_sym_or_raw_current_sym().unwrap_or(keysym.modified_sym());
+                            if let Some(action) = state.keybindings.check(modifiers, key, event.state()) {
                                 trace!("Key intercepted for action: {:?}", action);
                                 state.handle_action(action);
                                 FilterResult::Intercept(())
@@ -231,7 +230,7 @@ impl State {
                     
                     if let Some(window) = window_to_focus {
                         // update focus stack and focused window
-                        self.shell.write().unwrap().append_focus(window.clone());
+                        self.shell.write().unwrap().set_focus(window.clone());
                         
                         // set keyboard focus
                         if let Some(surface) = window.toplevel().and_then(|t| Some(t.wl_surface().clone())) {
@@ -414,7 +413,10 @@ impl State {
             FocusNext => {
                 let surface = {
                     let mut shell = self.shell.write().unwrap();
-                    shell.focus_next();
+                    // Use first output for now (single monitor)
+                    if let Some(output) = self.outputs.first() {
+                        shell.focus_next(output);
+                    }
                     // get surface to focus
                     shell.focused_window.as_ref()
                         .and_then(|w| w.toplevel())
@@ -430,7 +432,10 @@ impl State {
             FocusPrev => {
                 let surface = {
                     let mut shell = self.shell.write().unwrap();
-                    shell.focus_prev();
+                    // Use first output for now (single monitor)
+                    if let Some(output) = self.outputs.first() {
+                        shell.focus_prev(output);
+                    }
                     // get surface to focus
                     shell.focused_window.as_ref()
                         .and_then(|w| w.toplevel())
@@ -445,13 +450,11 @@ impl State {
             }
             Zoom => {
                 let mut shell = self.shell.write().unwrap();
-                shell.zoom();
-                let needs_render = shell.needs_arrange;
-                drop(shell);
-                if needs_render {
-                    for output in self.outputs.clone() {
-                        self.backend.schedule_render(&output);
-                    }
+                // Use first output for now (single monitor)
+                if let Some(output) = self.outputs.first() {
+                    shell.zoom(output);
+                    drop(shell);
+                    self.backend.schedule_render(output);
                 }
             }
             CloseWindow => {
@@ -461,60 +464,62 @@ impl State {
             ToggleFloating => {
                 let mut shell = self.shell.write().unwrap();
                 if let Some(window) = shell.focused_window.clone() {
-                    shell.toggle_floating(&window);
-                }
-                let needs_render = shell.needs_arrange;
-                drop(shell);
-                if needs_render {
-                    for output in self.outputs.clone() {
-                        self.backend.schedule_render(&output);
+                    // Use first output for now (single monitor)
+                    if let Some(output) = self.outputs.first() {
+                        shell.toggle_floating(&window, output);
+                        drop(shell);
+                        self.backend.schedule_render(output);
                     }
                 }
             }
             
             // layout control
             IncreaseMasterWidth => {
-                {
-                    let mut shell = self.shell.write().unwrap();
-                    shell.tiling.set_master_factor(0.05);
-                    shell.needs_arrange = true;
-                }
-                // schedule render on all outputs
-                for output in self.outputs.clone() {
-                    self.backend.schedule_render(&output);
+                let mut shell = self.shell.write().unwrap();
+                // Apply to active workspace on first output
+                if let Some(output) = self.outputs.first() {
+                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                        workspace.tiling.set_master_factor(0.05);
+                        workspace.needs_arrange = true;
+                    }
+                    drop(shell);
+                    self.backend.schedule_render(output);
                 }
             }
             DecreaseMasterWidth => {
-                {
-                    let mut shell = self.shell.write().unwrap();
-                    shell.tiling.set_master_factor(-0.05);
-                    shell.needs_arrange = true;
-                }
-                // schedule render on all outputs
-                for output in self.outputs.clone() {
-                    self.backend.schedule_render(&output);
+                let mut shell = self.shell.write().unwrap();
+                // Apply to active workspace on first output
+                if let Some(output) = self.outputs.first() {
+                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                        workspace.tiling.set_master_factor(-0.05);
+                        workspace.needs_arrange = true;
+                    }
+                    drop(shell);
+                    self.backend.schedule_render(output);
                 }
             }
             IncreaseMasterCount => {
-                {
-                    let mut shell = self.shell.write().unwrap();
-                    shell.tiling.inc_n_master(1);
-                    shell.needs_arrange = true;
-                }
-                // schedule render on all outputs
-                for output in self.outputs.clone() {
-                    self.backend.schedule_render(&output);
+                let mut shell = self.shell.write().unwrap();
+                // Apply to active workspace on first output
+                if let Some(output) = self.outputs.first() {
+                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                        workspace.tiling.inc_n_master(1);
+                        workspace.needs_arrange = true;
+                    }
+                    drop(shell);
+                    self.backend.schedule_render(output);
                 }
             }
             DecreaseMasterCount => {
-                {
-                    let mut shell = self.shell.write().unwrap();
-                    shell.tiling.inc_n_master(-1);
-                    shell.needs_arrange = true;
-                }
-                // schedule render on all outputs
-                for output in self.outputs.clone() {
-                    self.backend.schedule_render(&output);
+                let mut shell = self.shell.write().unwrap();
+                // Apply to active workspace on first output
+                if let Some(output) = self.outputs.first() {
+                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                        workspace.tiling.inc_n_master(-1);
+                        workspace.needs_arrange = true;
+                    }
+                    drop(shell);
+                    self.backend.schedule_render(output);
                 }
             }
             
@@ -544,6 +549,36 @@ impl State {
                     {
                         tracing::warn!("No menu program found (tried wofi, dmenu_run)");
                     }
+                }
+            }
+            
+            // workspace management
+            SwitchToWorkspace(name) => {
+                if let Some(output) = self.outputs.first() {
+                    let mut shell = self.shell.write().unwrap();
+                    shell.switch_to_workspace(output, name);
+                    drop(shell);
+                    self.backend.schedule_render(output);
+                }
+            }
+            MoveToWorkspace(name) => {
+                if let Some(output) = self.outputs.first() {
+                    let mut shell = self.shell.write().unwrap();
+                    
+                    // Get the focused window
+                    if let Some(window) = shell.focused_window.clone() {
+                        // Remove window from current workspace
+                        shell.remove_window(&window);
+                        
+                        // Switch to target workspace
+                        shell.switch_to_workspace(output, name.clone());
+                        
+                        // Add window to new workspace
+                        shell.add_window(window, output);
+                    }
+                    
+                    drop(shell);
+                    self.backend.schedule_render(output);
                 }
             }
             

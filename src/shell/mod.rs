@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 pub mod tiling;
+pub mod workspace;
 
 use smithay::{
     backend::renderer::{
@@ -19,74 +20,56 @@ use smithay::{
     output::Output,
     utils::{IsAlive, Logical, Point, Rectangle, Scale, Size},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::backend::render::element::{AsGlowRenderer, CosmicElement};
-use self::tiling::TilingLayout;
+use self::workspace::Workspace;
+
+/// Determine if a window should float by default
+fn should_float_impl(window: &Window) -> bool {
+    // Check if window is a dialog
+    if let Some(toplevel) = window.toplevel() {
+        if let Some(_parent) = toplevel.parent() {
+            // Window has a parent, likely a dialog
+            return true;
+        }
+    }
+    
+    // Could add more checks here based on window size, app_id, etc.
+    false
+}
 
 /// A simple shell for managing windows
 pub struct Shell {
     /// The space containing all windows
     pub space: Space<Window>,
     
-    /// Active windows indexed by their ID
-    pub windows: HashMap<u32, Window>,
+    /// All workspaces indexed by name
+    pub workspaces: HashMap<String, Workspace>,
     
-    /// Next window ID
-    next_window_id: u32,
+    /// Active workspace on each output
+    pub active_workspaces: HashMap<Output, String>,
     
-    /// The currently focused window
+    /// The currently focused window (global)
     pub focused_window: Option<Window>,
-    
-    /// Fullscreen window (if any)
-    pub fullscreen_window: Option<Window>,
-    
-    /// Geometry to restore when exiting fullscreen
-    pub fullscreen_restore: Option<Rectangle<i32, Logical>>,
-    
-    /// Index in focus stack to restore when exiting fullscreen
-    pub fullscreen_restore_index: Option<usize>,
-    
-    /// Window that just exited fullscreen (used for restoring position)
-    pub just_unfullscreened: Option<Window>,
     
     /// Cursor position (relative to space origin)
     pub cursor_position: Point<f64, Logical>,
     
     /// Cursor image status
     pub cursor_status: CursorImageStatus,
-    
-    /// Tiling layout manager
-    pub tiling: TilingLayout,
-    
-    /// Windows that are floating (exempt from tiling)
-    pub floating_windows: HashSet<Window>,
-    
-    /// Ordered list of windows for focus cycling
-    pub focus_stack: Vec<Window>,
-    
-    /// Flag indicating that windows need to be re-arranged
-    pub needs_arrange: bool,
 }
 
 impl Shell {
     pub fn new() -> Self {
         Self {
             space: Space::default(),
-            windows: HashMap::new(),
-            next_window_id: 1,
+            workspaces: HashMap::new(),
+            active_workspaces: HashMap::new(),
             focused_window: None,
-            fullscreen_window: None,
-            fullscreen_restore: None,
-            fullscreen_restore_index: None,
-            just_unfullscreened: None,
             // start cursor off-screen to avoid rendering on all outputs at startup
             cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
-            tiling: TilingLayout::new(Rectangle::from_size(Size::from((1920, 1080)))), // default area, will be updated
-            floating_windows: HashSet::new(),
-            focus_stack: Vec::new(),
-            needs_arrange: false,
         }
     }
     
@@ -95,44 +78,46 @@ impl Shell {
         // map the output at origin (we don't support multi-monitor positioning yet)
         self.space.map_output(output, Point::from((0, 0)));
         
-        // update tiling layout with available area (non-exclusive zone)
-        let layer_map = smithay::desktop::layer_map_for_output(output);
-        let available_area = layer_map.non_exclusive_zone();
-        self.tiling.set_available_area(available_area);
-        tracing::debug!("Initial available area for output {}: {:?}", output.name(), available_area);
+        // Initialize with workspace "1" if no workspace is active on this output
+        if !self.active_workspaces.contains_key(output) {
+            self.switch_to_workspace(output, "1".to_string());
+        }
         
         tracing::info!("Added output {} to shell space", output.name());
     }
     
     /// Add a new window to the shell
     pub fn add_window(&mut self, window: Window, output: &Output) {
-        let id = self.next_window_id;
-        self.next_window_id += 1;
+        // Get or create active workspace on this output
+        let workspace_name = self.active_workspaces.get(output).cloned()
+            .unwrap_or_else(|| {
+                // No active workspace on this output yet, create workspace "1"
+                self.switch_to_workspace(output, "1".to_string());
+                "1".to_string()
+            });
         
-        tracing::info!("Adding window {} to shell", id);
+        tracing::debug!("Adding window to workspace {} on output {}", workspace_name, output.name());
         
-        // add to our tracking
-        self.windows.insert(id, window.clone());
+        // Add to workspace
+        if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
+            // Determine if window should be floating
+            let floating = should_float_impl(&window);
+            
+            workspace.add_window(window.clone(), floating);
+            workspace.append_focus(&window);
+            
+            let windows_count = workspace.windows.len();
+            tracing::debug!("Window added successfully to workspace {}. Total windows in workspace: {}", 
+                workspace_name, windows_count);
+        }
         
-        // map the window to the space
-        let output_mode = output.current_mode().expect("Output should have a mode");
-        let output_size = output_mode.size;
-        let window_geometry = window.geometry();
-        let window_size = window_geometry.size;
-        
-        tracing::debug!("Output mode: {:?}, Output size: {:?}", output_mode, output_size);
-        tracing::debug!("Window geometry: {:?}, Window size: {:?}", window_geometry, window_size);
-        
-        // map window to a temporary location first, then mark for arrangement
+        // Map the window to the space
         self.space.map_element(window.clone(), Point::from((0, 0)), false);
-        self.needs_arrange = true;
         
-        // add to focus stack and set as focused
-        self.append_focus(window.clone());
-        tracing::debug!("Set window {} as focused", id);
-        
-        tracing::debug!("Window {} added successfully. Total windows: {}", id, self.windows.len());
+        // Set as focused
+        self.set_focus(window);
     }
+    
     
     /// Get the window under the given point
     pub fn window_under(&self, point: Point<f64, Logical>) -> Option<Window> {
@@ -265,43 +250,27 @@ impl Shell {
         None
     }
     
-    /// Get the current fullscreen window (if any)
-    pub fn get_fullscreen(&self) -> Option<&Window> {
-        self.fullscreen_window.as_ref()
+    /// Get the current fullscreen window (if any) for the given output
+    pub fn get_fullscreen(&self, output: &Output) -> Option<&Window> {
+        self.active_workspace(output)
+            .and_then(|ws| ws.fullscreen.as_ref())
     }
     
     /// Set a window as fullscreen
-    pub fn set_fullscreen(&mut self, window: Window, fullscreen: bool) {
-        if fullscreen {
-            // store current geometry before going fullscreen
-            if let Some(geometry) = self.space.element_geometry(&window) {
-                self.fullscreen_restore = Some(geometry);
+    pub fn set_fullscreen(&mut self, window: Window, fullscreen: bool, output: &Output) {
+        if let Some(workspace) = self.active_workspace_mut(output) {
+            if fullscreen {
+                workspace.fullscreen = Some(window);
+            } else if workspace.fullscreen.as_ref() == Some(&window) {
+                workspace.fullscreen = None;
             }
-            
-            // store window's position in the tiling order
-            // we need to find it in space.elements() as that's what arrange() uses
-            let elements: Vec<_> = self.space.elements()
-                .filter(|w| !self.floating_windows.contains(w))
-                .cloned()
-                .collect();
-            
-            if let Some(index) = elements.iter().position(|w| w == &window) {
-                self.fullscreen_restore_index = Some(index);
-                tracing::info!("Storing fullscreen restore index: {}", index);
-            }
-            
-            self.fullscreen_window = Some(window);
-        } else if self.fullscreen_window.as_ref() == Some(&window) {
-            self.fullscreen_window = None;
-            self.just_unfullscreened = Some(window);
-            // geometry and index will be restored by arrange()
+            workspace.needs_arrange = true;
         }
+        
+        // Arrange windows after fullscreen change
+        self.arrange_windows_on_output(output);
     }
     
-    /// Take the fullscreen restore geometry (used when exiting fullscreen)
-    pub fn take_fullscreen_restore(&mut self) -> Option<Rectangle<i32, Logical>> {
-        self.fullscreen_restore.take()
-    }
     
     /// Refresh the space (needed for damage tracking)
     pub fn refresh(&mut self) {
@@ -430,22 +399,24 @@ impl Shell {
             }
         }
         
-        // 2. Windows (in the middle)
-        for window in self.space.elements() {
-            if let Some(location) = self.space.element_location(window) {
-                // get surface render elements and wrap them in CosmicElement
-                let surface_elements = window.render_elements(
-                    renderer,
-                    location.to_physical_precise_round(output_scale),
-                    output_scale,
-                    1.0, // alpha
-                );
-                
-                // wrap each surface element in CosmicElement::Surface
-                elements.extend(
-                    surface_elements.into_iter()
-                        .map(|elem| CosmicElement::Surface(elem))
-                );
+        // 2. Windows (in the middle) - only from active workspace
+        if let Some(workspace) = self.active_workspace(output) {
+            for window in &workspace.windows {
+                if let Some(location) = self.space.element_location(window) {
+                    // get surface render elements and wrap them in CosmicElement
+                    let surface_elements = window.render_elements(
+                        renderer,
+                        location.to_physical_precise_round(output_scale),
+                        output_scale,
+                        1.0, // alpha
+                    );
+                    
+                    // wrap each surface element in CosmicElement::Surface
+                    elements.extend(
+                        surface_elements.into_iter()
+                            .map(|elem| CosmicElement::Surface(elem))
+                    );
+                }
             }
         }
         
@@ -473,35 +444,173 @@ impl Shell {
         elements
     }
     
-    /// Arrange windows according to the current tiling layout
+    /// Arrange windows on all outputs
+    #[allow(dead_code)] // Will be used when we handle multi-output scenarios
     pub fn arrange(&mut self) {
-        // handle fullscreen window first
-        if let Some(fullscreen_window) = self.fullscreen_window.as_ref() {
-            // get the output size for fullscreen
-            let output = self.space.outputs().next();
-            if let Some(output) = output {
-                let output_size = output.current_mode()
-                    .map(|mode| {
-                        let scale = output.current_scale().fractional_scale();
-                        Size::from((
-                            (mode.size.w as f64 / scale) as i32,
-                            (mode.size.h as f64 / scale) as i32,
-                        ))
-                    })
-                    .unwrap_or_else(|| (1920, 1080).into());
+        // Arrange windows on each output
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        for output in outputs {
+            self.arrange_windows_on_output(&output);
+        }
+    }
+    
+    /// Legacy arrange method (removed)
+//     #[allow(dead_code)]
+//     fn arrange_old(&mut self) {
+//         // Method removed - use arrange_windows_on_output instead
+//         unimplemented!("Use arrange_windows_on_output instead")
+//         // handle fullscreen window first
+//         if let Some(fullscreen_window) = self.fullscreen_window.as_ref() {
+//             // get the output size for fullscreen
+//             let output = self.space.outputs().next();
+//             if let Some(output) = output {
+//                 let output_size = output.current_mode()
+//                     .map(|mode| {
+//                         let scale = output.current_scale().fractional_scale();
+//                         Size::from((
+//                             (mode.size.w as f64 / scale) as i32,
+//                             (mode.size.h as f64 / scale) as i32,
+//                         ))
+//                     })
+//                     .unwrap_or_else(|| (1920, 1080).into());
+//                 
+//                 // position fullscreen window at origin with full output size
+//                 self.space.map_element(fullscreen_window.clone(), Point::from((0, 0)), false);
+//                 
+//                 if let Some(toplevel) = fullscreen_window.toplevel() {
+//                     use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+//                     
+//                     toplevel.with_pending_state(|state| {
+//                         state.size = Some(output_size);
+//                         state.bounds = Some(output_size);
+//                         state.states.set(State::Fullscreen);
+//                         
+//                         // remove tiled states
+//                         state.states.unset(State::TiledLeft);
+//                         state.states.unset(State::TiledRight);
+//                         state.states.unset(State::TiledTop);
+//                         state.states.unset(State::TiledBottom);
+//                     });
+//                     
+//                     if toplevel.is_initial_configure_sent() {
+//                         toplevel.send_configure();
+//                     }
+//                 }
+//                 
+//                 tracing::debug!("Positioned fullscreen window at full output size: {:?}", output_size);
+//             }
+//         }
+//         
+//         // get the non-exclusive zone for tiling
+//         let available_area = if let Some(output) = self.space.outputs().next() {
+//             let layer_map = smithay::desktop::layer_map_for_output(output);
+//             layer_map.non_exclusive_zone()
+//         } else {
+//             // fallback to full screen if no output
+//             Rectangle::from_size(Size::from((1920, 1080)))
+//         };
+//         
+//         // update tiling layout with the available area
+//         self.tiling.set_available_area(available_area);
+//         
+//         // collect windows to tile (non-floating, non-fullscreen)
+//         let mut windows_to_tile = Vec::new();
+//         
+//         // check if we have a window that just exited fullscreen
+//         let unfullscreened_window = self.just_unfullscreened.take();
+//         if unfullscreened_window.is_some() {
+//             tracing::debug!("Window just exited fullscreen, restore index: {:?}", self.fullscreen_restore_index);
+//         }
+//         
+//         for window in self.space.elements() {
+//             if !self.floating_windows.contains(window) 
+//                 && self.fullscreen_window.as_ref() != Some(window) {
+//                 // skip the unfullscreened window for now
+//                 if unfullscreened_window.as_ref() == Some(window) {
+//                     continue;
+//                 }
+//                 windows_to_tile.push(window.clone());
+//             }
+//         }
+//         
+//         // if we have a window that just exited fullscreen, insert it at the saved position
+//         if let Some(window) = unfullscreened_window {
+//             if let Some(index) = self.fullscreen_restore_index.take() {
+//                 // clamp index to valid range in case windows were closed
+//                 let insert_pos = index.min(windows_to_tile.len());
+//                 windows_to_tile.insert(insert_pos, window.clone());
+//                 tracing::debug!("Restored unfullscreened window to position {}", insert_pos);
+//             } else {
+//                 // no saved index, add it at the end
+//                 windows_to_tile.push(window.clone());
+//                 tracing::debug!("No restore index, added unfullscreened window at end");
+//             }
+//             
+//             // clear the restore geometry as we've handled it
+//             self.fullscreen_restore = None;
+//         }
+//         
+//         // get tile positions
+//         let positions = self.tiling.tile(&windows_to_tile);
+//         
+//         // apply positions and sizes
+//         for (window, rect) in positions {
+//             // position the window
+//             self.space.map_element(window.clone(), rect.loc, false);
+//             
+//             // resize the window if it has a toplevel surface
+//             if let Some(toplevel) = window.toplevel() {
+//                 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+//                 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+//                 
+//                 toplevel.with_pending_state(|state| {
+//                     state.size = Some(rect.size);
+//                     state.bounds = Some(rect.size);
+//                     
+//                     // force server-side decorations (no client decorations)
+//                     state.decoration_mode = Some(Mode::ServerSide);
+//                     
+//                     // set tiled states to remove decorations and inform the client
+//                     state.states.set(State::TiledLeft);
+//                     state.states.set(State::TiledRight);
+//                     state.states.set(State::TiledTop);
+//                     state.states.set(State::TiledBottom);
+//                     
+//                     // remove maximized/fullscreen states if present
+//                     state.states.unset(State::Maximized);
+//                     state.states.unset(State::Fullscreen);
+//                 });
+//                 
+//                 // only send configure if initial configure was already sent
+//                 if toplevel.is_initial_configure_sent() {
+//                     toplevel.send_configure();
+//                 }
+//             }
+//         }
+//         
+//         tracing::debug!("Arranged {} windows", windows_to_tile.len());
+//         
+//         // no need to send frame callbacks here - the render loop will handle that
+//     }
+    
+    /// Toggle floating state for a window
+    pub fn toggle_floating(&mut self, window: &Window, output: &Output) {
+        if let Some(workspace) = self.active_workspace_mut(output) {
+            if workspace.floating_windows.contains(window) {
+                workspace.floating_windows.remove(window);
+                tracing::debug!("Window no longer floating");
+            } else {
+                workspace.floating_windows.insert(window.clone());
                 
-                // position fullscreen window at origin with full output size
-                self.space.map_element(fullscreen_window.clone(), Point::from((0, 0)), false);
-                
-                if let Some(toplevel) = fullscreen_window.toplevel() {
+                // clear tiled states when window becomes floating
+                if let Some(toplevel) = window.toplevel() {
                     use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                    use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
                     
                     toplevel.with_pending_state(|state| {
-                        state.size = Some(output_size);
-                        state.bounds = Some(output_size);
-                        state.states.set(State::Fullscreen);
+                        // restore client-side decorations
+                        state.decoration_mode = Some(Mode::ClientSide);
                         
-                        // remove tiled states
                         state.states.unset(State::TiledLeft);
                         state.states.unset(State::TiledRight);
                         state.states.unset(State::TiledTop);
@@ -513,185 +622,133 @@ impl Shell {
                     }
                 }
                 
-                tracing::debug!("Positioned fullscreen window at full output size: {:?}", output_size);
+                tracing::debug!("Window set to floating");
             }
+            workspace.needs_arrange = true;
         }
         
-        // get the non-exclusive zone for tiling
-        let available_area = if let Some(output) = self.space.outputs().next() {
-            let layer_map = smithay::desktop::layer_map_for_output(output);
-            layer_map.non_exclusive_zone()
-        } else {
-            // fallback to full screen if no output
-            Rectangle::from_size(Size::from((1920, 1080)))
-        };
-        
-        // update tiling layout with the available area
-        self.tiling.set_available_area(available_area);
-        
-        // collect windows to tile (non-floating, non-fullscreen)
-        let mut windows_to_tile = Vec::new();
-        
-        // check if we have a window that just exited fullscreen
-        let unfullscreened_window = self.just_unfullscreened.take();
-        if unfullscreened_window.is_some() {
-            tracing::debug!("Window just exited fullscreen, restore index: {:?}", self.fullscreen_restore_index);
-        }
-        
-        for window in self.space.elements() {
-            if !self.floating_windows.contains(window) 
-                && self.fullscreen_window.as_ref() != Some(window) {
-                // skip the unfullscreened window for now
-                if unfullscreened_window.as_ref() == Some(window) {
-                    continue;
-                }
-                windows_to_tile.push(window.clone());
-            }
-        }
-        
-        // if we have a window that just exited fullscreen, insert it at the saved position
-        if let Some(window) = unfullscreened_window {
-            if let Some(index) = self.fullscreen_restore_index.take() {
-                // clamp index to valid range in case windows were closed
-                let insert_pos = index.min(windows_to_tile.len());
-                windows_to_tile.insert(insert_pos, window.clone());
-                tracing::debug!("Restored unfullscreened window to position {}", insert_pos);
-            } else {
-                // no saved index, add it at the end
-                windows_to_tile.push(window.clone());
-                tracing::debug!("No restore index, added unfullscreened window at end");
-            }
-            
-            // clear the restore geometry as we've handled it
-            self.fullscreen_restore = None;
-        }
-        
-        // get tile positions
-        let positions = self.tiling.tile(&windows_to_tile);
-        
-        // apply positions and sizes
-        for (window, rect) in positions {
-            // position the window
-            self.space.map_element(window.clone(), rect.loc, false);
-            
-            // resize the window if it has a toplevel surface
-            if let Some(toplevel) = window.toplevel() {
-                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
-                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                
-                toplevel.with_pending_state(|state| {
-                    state.size = Some(rect.size);
-                    state.bounds = Some(rect.size);
-                    
-                    // force server-side decorations (no client decorations)
-                    state.decoration_mode = Some(Mode::ServerSide);
-                    
-                    // set tiled states to remove decorations and inform the client
-                    state.states.set(State::TiledLeft);
-                    state.states.set(State::TiledRight);
-                    state.states.set(State::TiledTop);
-                    state.states.set(State::TiledBottom);
-                    
-                    // remove maximized/fullscreen states if present
-                    state.states.unset(State::Maximized);
-                    state.states.unset(State::Fullscreen);
-                });
-                
-                // only send configure if initial configure was already sent
-                if toplevel.is_initial_configure_sent() {
-                    toplevel.send_configure();
-                }
-            }
-        }
-        
-        tracing::debug!("Arranged {} windows", windows_to_tile.len());
-        
-        // no need to send frame callbacks here - the render loop will handle that
-    }
-    
-    /// Toggle floating state for a window
-    pub fn toggle_floating(&mut self, window: &Window) {
-        if self.floating_windows.contains(window) {
-            self.floating_windows.remove(window);
-            tracing::debug!("Window no longer floating");
-        } else {
-            self.floating_windows.insert(window.clone());
-            
-            // clear tiled states when window becomes floating
-            if let Some(toplevel) = window.toplevel() {
-                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
-                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                
-                toplevel.with_pending_state(|state| {
-                    // restore client-side decorations
-                    state.decoration_mode = Some(Mode::ClientSide);
-                    
-                    state.states.unset(State::TiledLeft);
-                    state.states.unset(State::TiledRight);
-                    state.states.unset(State::TiledTop);
-                    state.states.unset(State::TiledBottom);
-                });
-                
-                if toplevel.is_initial_configure_sent() {
-                    toplevel.send_configure();
-                }
-            }
-            
-            tracing::debug!("Window set to floating");
-        }
-        self.needs_arrange = true;
+        self.arrange_windows_on_output(output);
     }
     
     /// Zoom - swap focused window with first master window
-    pub fn zoom(&mut self) {
+    pub fn zoom(&mut self, output: &Output) {
         if let Some(focused) = self.focused_window.clone() {
-            // find focused window in focus stack
-            if let Some(pos) = self.focus_stack.iter().position(|w| w == &focused) {
-                if pos > 0 {
-                    // swap with first window
-                    self.focus_stack.swap(0, pos);
-                    self.needs_arrange = true;
-                    tracing::debug!("Zoomed window to master");
+            if let Some(workspace) = self.active_workspace_mut(output) {
+                // find focused window in workspace
+                if let Some(pos) = workspace.windows.iter().position(|w| w == &focused) {
+                    if pos > 0 && !workspace.floating_windows.contains(&focused) {
+                        // swap with first position
+                        workspace.windows.swap(0, pos);
+                        workspace.needs_arrange = true;
+                        tracing::debug!("Zoomed window to master");
+                        
+                        self.arrange_windows_on_output(output);
+                    }
                 }
             }
         }
     }
     
     /// Focus the next window in the stack
-    pub fn focus_next(&mut self) {
-        if self.focus_stack.len() <= 1 {
-            return;
-        }
+    pub fn focus_next(&mut self, output: &Output) {
+        // Get workspace name for the output
+        let workspace_name = match self.active_workspaces.get(output).cloned() {
+            Some(name) => name,
+            None => return,
+        };
         
-        if let Some(focused) = &self.focused_window {
-            if let Some(pos) = self.focus_stack.iter().position(|w| w == focused) {
-                let next_pos = (pos + 1) % self.focus_stack.len();
-                let next_window = self.focus_stack[next_pos].clone();
-                self.append_focus(next_window);
-                tracing::debug!("Focused next window");
+        // Get info we need from workspace
+        let (_focus_stack_len, _current_pos, next_window) = {
+            let workspace = match self.workspaces.get_mut(&workspace_name) {
+                Some(ws) => ws,
+                None => return,
+            };
+            
+            // clean up dead windows first
+            workspace.refresh();
+            
+            let stack_len = workspace.focus_stack.len();
+            tracing::debug!("focus_next called. Focus stack size: {}, current focused: {:?}", 
+                stack_len, self.focused_window.is_some());
+                
+            if stack_len <= 1 {
+                tracing::debug!("Not enough windows to cycle");
+                return;
             }
-        } else if !self.focus_stack.is_empty() {
-            let first_window = self.focus_stack[0].clone();
-            self.append_focus(first_window);
+            
+            let current_pos = self.focused_window.as_ref()
+                .and_then(|focused| workspace.focus_stack.iter().position(|w| w == focused));
+            
+            let next_window = if let Some(pos) = current_pos {
+                let next_pos = (pos + 1) % stack_len;
+                tracing::debug!("Switching focus from position {} to {} (of {})", pos, next_pos, stack_len);
+                Some(workspace.focus_stack[next_pos].clone())
+            } else if !workspace.focus_stack.is_empty() {
+                tracing::debug!("Focused window not in stack, focusing first");
+                Some(workspace.focus_stack[0].clone())
+            } else {
+                None
+            };
+            
+            (stack_len, current_pos, next_window)
+        };
+        
+        // Update focus
+        if let Some(next_window) = next_window {
+            // Update workspace focus stack
+            if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
+                workspace.append_focus(&next_window);
+            }
+            self.set_focus(next_window);
         }
     }
     
     /// Focus the previous window in the stack
-    pub fn focus_prev(&mut self) {
-        if self.focus_stack.len() <= 1 {
-            return;
-        }
+    pub fn focus_prev(&mut self, output: &Output) {
+        // Get workspace name for the output
+        let workspace_name = match self.active_workspaces.get(output).cloned() {
+            Some(name) => name,
+            None => return,
+        };
         
-        if let Some(focused) = &self.focused_window {
-            if let Some(pos) = self.focus_stack.iter().position(|w| w == focused) {
-                let prev_pos = if pos == 0 { self.focus_stack.len() - 1 } else { pos - 1 };
-                let prev_window = self.focus_stack[prev_pos].clone();
-                self.append_focus(prev_window);
-                tracing::debug!("Focused previous window");
+        // Get info we need from workspace
+        let prev_window = {
+            let workspace = match self.workspaces.get_mut(&workspace_name) {
+                Some(ws) => ws,
+                None => return,
+            };
+            
+            // clean up dead windows first
+            workspace.refresh();
+            
+            let stack_len = workspace.focus_stack.len();
+            if stack_len <= 1 {
+                return;
             }
-        } else if !self.focus_stack.is_empty() {
-            let last_window = self.focus_stack[self.focus_stack.len() - 1].clone();
-            self.append_focus(last_window);
+            
+            let current_pos = self.focused_window.as_ref()
+                .and_then(|focused| workspace.focus_stack.iter().position(|w| w == focused));
+            
+            if let Some(pos) = current_pos {
+                let prev_pos = if pos == 0 { stack_len - 1 } else { pos - 1 };
+                tracing::debug!("Switching focus from position {} to {} (of {})", pos, prev_pos, stack_len);
+                Some(workspace.focus_stack[prev_pos].clone())
+            } else if !workspace.focus_stack.is_empty() {
+                tracing::debug!("Focused window not in stack, focusing last");
+                Some(workspace.focus_stack[stack_len - 1].clone())
+            } else {
+                None
+            }
+        };
+        
+        // Update focus
+        if let Some(prev_window) = prev_window {
+            // Update workspace focus stack
+            if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
+                workspace.append_focus(&prev_window);
+            }
+            self.set_focus(prev_window);
+            tracing::debug!("Focused previous window");
         }
     }
     
@@ -701,6 +758,8 @@ impl Shell {
             if let Some(surface) = window.toplevel() {
                 surface.send_close();
                 tracing::info!("Sent close request to focused window");
+            } else {
+                tracing::warn!("Focused window has no toplevel surface");
             }
         } else {
             tracing::warn!("No focused window to close");
@@ -710,11 +769,18 @@ impl Shell {
     /// Refresh focus to the topmost window in the focus stack
     /// Called when layer surfaces are destroyed or focus needs updating
     pub fn refresh_focus(&mut self) -> Option<Window> {
-        // find the last alive window in the focus stack
-        let focused = self.focus_stack.iter()
+        // Find the topmost alive window from any visible workspace
+        // We collect all focus stacks and then look for the last alive window
+        let mut all_windows = Vec::new();
+        for ws_name in self.active_workspaces.values() {
+            if let Some(workspace) = self.workspaces.get(ws_name) {
+                all_windows.extend(workspace.focus_stack.iter().cloned());
+            }
+        }
+        
+        let focused = all_windows.into_iter()
             .rev()
-            .find(|w| w.alive())
-            .cloned();
+            .find(|w| w.alive());
         
         self.focused_window = focused.clone();
         
@@ -727,20 +793,223 @@ impl Shell {
         focused
     }
     
-    /// Update the focus stack when a window receives focus
-    pub fn append_focus(&mut self, window: Window) {
-        // remove dead windows from the stack
-        self.focus_stack.retain(|w| w.alive());
+    /// Set keyboard focus to a window
+    pub fn set_focus(&mut self, window: Window) {
+        self.focused_window = Some(window);
+    }
+    
+    // ========== Workspace Management ==========
+    
+    /// Get or create a workspace with the given name
+    pub fn get_or_create_workspace(&mut self, name: String) -> &mut Workspace {
+        self.workspaces.entry(name.clone()).or_insert_with(|| {
+            tracing::info!("Creating new workspace: {}", name);
+            Workspace::new(name)
+        })
+    }
+    
+    /// Get the active workspace for an output
+    pub fn active_workspace(&self, output: &Output) -> Option<&Workspace> {
+        self.active_workspaces.get(output)
+            .and_then(|name| self.workspaces.get(name))
+    }
+    
+    /// Get the active workspace for an output (mutable)
+    pub fn active_workspace_mut(&mut self, output: &Output) -> Option<&mut Workspace> {
+        self.active_workspaces.get(output)
+            .cloned()
+            .and_then(move |name| self.workspaces.get_mut(&name))
+    }
+    
+    /// Switch to a workspace on the given output
+    pub fn switch_to_workspace(&mut self, output: &Output, name: String) {
+        tracing::info!("Switching to workspace {} on output {}", name, output.name());
         
-        // remove the window if it's already in the stack
-        if let Some(pos) = self.focus_stack.iter().position(|w| w == &window) {
-            self.focus_stack.remove(pos);
+        // Hide current workspace
+        if let Some(current_name) = self.active_workspaces.get(output).cloned() {
+            if current_name == name {
+                tracing::debug!("Already on workspace {}", name);
+                return;
+            }
+            
+            if let Some(current) = self.workspaces.get_mut(&current_name) {
+                tracing::debug!("Hiding workspace {} with {} windows", current_name, current.windows.len());
+                for window in &current.windows {
+                    self.space.unmap_elem(window);
+                }
+                current.output = None;
+            }
         }
         
-        // add it to the end (most recently focused)
-        self.focus_stack.push(window.clone());
-        self.focused_window = Some(window);
+        // Get workspace info we need
+        let (other_output_to_remove, windows_to_map, focus_target) = {
+            let workspace = self.get_or_create_workspace(name.clone());
+            
+            // Check if workspace was on another output
+            let other_output = if let Some(other) = &workspace.output {
+                if other != output {
+                    Some(other.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            // Update workspace geometry based on output
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            let available_area = layer_map.non_exclusive_zone();
+            workspace.update_output_geometry(available_area);
+            
+            // Set new output
+            workspace.output = Some(output.clone());
+            
+            // Get windows and focus target
+            let windows = workspace.windows.clone();
+            let focus = workspace.focus_stack.last().cloned();
+            
+            (other_output, windows, focus)
+        };
         
-        tracing::trace!("Focus stack updated, {} windows tracked", self.focus_stack.len());
+        // Remove from other output if needed
+        if let Some(other_output) = other_output_to_remove {
+            tracing::debug!("Workspace {} was on output {}, removing it", name, other_output.name());
+            self.active_workspaces.remove(&other_output);
+        }
+        
+        tracing::debug!("Showing workspace {} with {} windows", name, windows_to_map.len());
+        for window in windows_to_map {
+            self.space.map_element(window, (0, 0), false);
+        }
+        
+        // Update active workspace mapping
+        self.active_workspaces.insert(output.clone(), name);
+        
+        // Restore focus
+        if let Some(window) = focus_target {
+            if window.alive() {
+                self.set_focus(window);
+            } else {
+                self.focused_window = None;
+            }
+        } else {
+            self.focused_window = None;
+        }
+        
+        // Arrange windows in the new workspace
+        self.arrange_windows_on_output(output);
+    }
+    
+    /// Arrange windows on the given output according to the tiling layout
+    pub fn arrange_windows_on_output(&mut self, output: &Output) {
+        // Get the active workspace for this output
+        let workspace_name = match self.active_workspaces.get(output).cloned() {
+            Some(name) => name,
+            None => return, // No active workspace on this output
+        };
+        
+        let workspace = match self.workspaces.get_mut(&workspace_name) {
+            Some(ws) => ws,
+            None => return,
+        };
+        
+        // Handle fullscreen window first
+        if let Some(fullscreen_window) = &workspace.fullscreen {
+            let output_size = output.current_mode()
+                .map(|mode| {
+                    let scale = output.current_scale().fractional_scale();
+                    Size::from((
+                        (mode.size.w as f64 / scale) as i32,
+                        (mode.size.h as f64 / scale) as i32,
+                    ))
+                })
+                .unwrap_or_else(|| (1920, 1080).into());
+            
+            // Position fullscreen window at origin with full output size
+            self.space.map_element(fullscreen_window.clone(), Point::from((0, 0)), false);
+            
+            if let Some(toplevel) = fullscreen_window.toplevel() {
+                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                
+                toplevel.with_pending_state(|state| {
+                    state.size = Some(output_size);
+                    state.bounds = Some(output_size);
+                    state.states.set(State::Fullscreen);
+                    
+                    // Remove tiled states
+                    state.states.unset(State::TiledLeft);
+                    state.states.unset(State::TiledRight);
+                    state.states.unset(State::TiledTop);
+                    state.states.unset(State::TiledBottom);
+                });
+                
+                if toplevel.is_initial_configure_sent() {
+                    toplevel.send_configure();
+                }
+            }
+            
+            return; // Don't arrange other windows when one is fullscreen
+        }
+        
+        // Get tiled windows
+        let windows_to_tile: Vec<_> = workspace.tiled_windows().cloned().collect();
+        
+        // Get tile positions
+        let positions = workspace.tiling.tile(&windows_to_tile);
+        
+        // Apply positions and sizes
+        for (window, rect) in positions {
+            // Position the window
+            self.space.map_element(window.clone(), rect.loc, false);
+            
+            // Resize the window if it has a toplevel surface
+            if let Some(toplevel) = window.toplevel() {
+                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                
+                toplevel.with_pending_state(|state| {
+                    state.size = Some(rect.size);
+                    state.bounds = Some(rect.size);
+                    
+                    // Force server-side decorations (no client decorations)
+                    state.decoration_mode = Some(Mode::ServerSide);
+                    
+                    // Set tiled states to remove decorations and inform the client
+                    state.states.set(State::TiledLeft);
+                    state.states.set(State::TiledRight);
+                    state.states.set(State::TiledTop);
+                    state.states.set(State::TiledBottom);
+                });
+                
+                // Send the configure event
+                if toplevel.is_initial_configure_sent() {
+                    toplevel.send_configure();
+                }
+            }
+        }
+        
+        workspace.needs_arrange = false;
+    }
+    
+    /// Remove a window from all workspaces
+    pub fn remove_window(&mut self, window: &Window) -> Option<Output> {
+        let mut found_output = None;
+        
+        // Find and remove from all workspaces
+        for workspace in self.workspaces.values_mut() {
+            if workspace.remove_window(window) {
+                found_output = workspace.output.clone();
+            }
+        }
+        
+        // Clear focused window if it was removed
+        if self.focused_window.as_ref() == Some(window) {
+            self.focused_window = None;
+        }
+        
+        // Unmap from space
+        self.space.unmap_elem(window);
+        
+        found_output
     }
 }
