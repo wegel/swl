@@ -111,9 +111,21 @@ impl State {
                     let mut location = pointer.current_location();
                     location += delta;
                     
-                    // clamp to screen bounds (we'll improve this later with output tracking)
-                    location.x = location.x.max(0.0);
-                    location.y = location.y.max(0.0);
+                    // get output bounds and clamp pointer to screen
+                    if let Some(output) = self.outputs.first() {
+                        if let Some(mode) = output.current_mode() {
+                            let scale = output.current_scale().fractional_scale();
+                            let max_x = (mode.size.w as f64 / scale) - 1.0;
+                            let max_y = (mode.size.h as f64 / scale) - 1.0;
+                            
+                            location.x = location.x.clamp(0.0, max_x);
+                            location.y = location.y.clamp(0.0, max_y);
+                        }
+                    } else {
+                        // fallback if no output
+                        location.x = location.x.max(0.0);
+                        location.y = location.y.max(0.0);
+                    }
                     
                     let serial = SERIAL_COUNTER.next_serial();
                     let time = Event::time_msec(&event);
@@ -149,12 +161,29 @@ impl State {
                     let pointer = seat.get_pointer().unwrap();
                     
                     // for absolute motion, we need output dimensions
-                    // for now use a default size
-                    let output_size = (1920.0, 1080.0);
-                    let location = Point::from((
-                        event.x() * output_size.0,
-                        event.y() * output_size.1,
-                    ));
+                    let location = if let Some(output) = self.outputs.first() {
+                        if let Some(mode) = output.current_mode() {
+                            let scale = output.current_scale().fractional_scale();
+                            let width = mode.size.w as f64 / scale;
+                            let height = mode.size.h as f64 / scale;
+                            Point::from((
+                                (event.x() * width).clamp(0.0, width - 1.0),
+                                (event.y() * height).clamp(0.0, height - 1.0),
+                            ))
+                        } else {
+                            // fallback if no mode
+                            Point::from((
+                                event.x() * 1920.0,
+                                event.y() * 1080.0,
+                            ))
+                        }
+                    } else {
+                        // fallback if no output
+                        Point::from((
+                            event.x() * 1920.0,
+                            event.y() * 1080.0,
+                        ))
+                    };
                     
                     let serial = SERIAL_COUNTER.next_serial();
                     let time = Event::time_msec(&event);
