@@ -1021,8 +1021,6 @@ impl SurfaceThreadState {
     
     /// Perform a redraw with damage tracking using PostprocessState
     fn redraw(&mut self, _estimated_presentation: Duration) -> Result<()> {
-        tracing::info!("Starting redraw for {}", self.output.name());
-        
         // check we have a compositor first
         if self.compositor.is_none() {
             debug!("No compositor for {}, skipping redraw", self.output.name());

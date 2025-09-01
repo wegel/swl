@@ -988,7 +988,6 @@ impl Shell {
     
     /// Arrange windows on the given output according to the tiling layout
     pub fn arrange_windows_on_output(&mut self, output: &Output) {
-        tracing::info!("arrange_windows_on_output called for output {}", output.name());
         // Get the active workspace for this output
         let workspace_name = match self.active_workspaces.get(output).cloned() {
             Some(name) => name,

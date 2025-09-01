@@ -526,30 +526,51 @@ impl State {
             // applications
             LaunchTerminal => {
                 info!("Launching terminal");
-                if let Err(e) = Command::new("foot")
-                    .env("WAYLAND_DISPLAY", &self.socket_name)
-                    .spawn() {
-                    tracing::error!("Failed to launch terminal: {}", e);
-                }
+                let socket_name = self.socket_name.clone();
+                std::thread::spawn(move || {
+                    match Command::new("foot")
+                        .env("WAYLAND_DISPLAY", &socket_name)
+                        .spawn()
+                    {
+                        Ok(mut child) => {
+                            let _ = child.wait();
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to launch terminal: {}", e);
+                        }
+                    }
+                });
             }
             LaunchMenu => {
                 info!("Launching menu");
-                // try common menu programs
-                if Command::new("wofi")
-                    .arg("--show")
-                    .arg("drun")
-                    .env("WAYLAND_DISPLAY", &self.socket_name)
-                    .spawn()
-                    .is_err() 
-                {
-                    if Command::new("dmenu_run")
-                        .env("WAYLAND_DISPLAY", &self.socket_name)
+                let socket_name = self.socket_name.clone();
+                std::thread::spawn(move || {
+                    // try wofi first
+                    match Command::new("wofi")
+                        .arg("--show")
+                        .arg("drun")
+                        .env("WAYLAND_DISPLAY", &socket_name)
                         .spawn()
-                        .is_err() 
                     {
-                        tracing::warn!("No menu program found (tried wofi, dmenu_run)");
+                        Ok(mut child) => {
+                            let _ = child.wait();
+                        }
+                        Err(_) => {
+                            // fallback to dmenu_run
+                            match Command::new("dmenu_run")
+                                .env("WAYLAND_DISPLAY", &socket_name)
+                                .spawn()
+                            {
+                                Ok(mut child) => {
+                                    let _ = child.wait();
+                                }
+                                Err(_) => {
+                                    tracing::warn!("No menu program found (tried wofi, dmenu_run)");
+                                }
+                            }
+                        }
                     }
-                }
+                });
             }
             
             // workspace management

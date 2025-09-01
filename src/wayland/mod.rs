@@ -119,8 +119,6 @@ impl CompositorHandler for State {
                 window.refresh();
                 
                 if let Some(output) = self.outputs.first().cloned() {
-                    tracing::info!("Mapping pending window to output {} (geometry: {:?})", 
-                                  output.name(), window.geometry());
                     
                     // check if window should be fullscreen
                     let is_fullscreen = toplevel.with_pending_state(|state| {
@@ -226,7 +224,6 @@ impl XdgShellHandler for State {
     }
     
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        tracing::info!("New toplevel surface requested");
         let window = Window::new_wayland_window(surface.clone());
         
         // check if fullscreen was already requested (e.g., foot -F)
@@ -255,7 +252,6 @@ impl XdgShellHandler for State {
         
         // store as pending window - will be mapped after first commit with buffer
         self.pending_windows.push((surface, window));
-        tracing::info!("Window added to pending list, waiting for initial commit with buffer");
     }
     
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {

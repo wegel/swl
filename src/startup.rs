@@ -60,35 +60,34 @@ fn execute_program(program_path: &str) {
         return;
     }
     
-    // Fork and execute the program directly
+    // Fork and execute the program in a thread that will wait for it
     // The program will inherit all environment variables including WAYLAND_DISPLAY
-    match Command::new(program_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(mut child) => {
-            // Detach the child process
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        warn!("Startup program exited with status: {}", status);
+    let program_path = program_path.to_string();
+    std::thread::spawn(move || {
+        match Command::new(&program_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                info!("Startup program launched successfully: {}", program_path);
+                match child.wait() {
+                    Ok(status) => {
+                        if !status.success() {
+                            warn!("Startup program {} exited with status: {}", program_path, status);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to wait for startup program {}: {}", program_path, e);
                     }
                 }
-                Ok(None) => {
-                    // Child is still running, which is fine
-                    info!("Startup program launched successfully");
-                }
-                Err(e) => {
-                    error!("Failed to check startup program status: {}", e);
-                }
+            }
+            Err(e) => {
+                error!("Failed to execute startup program {}: {}", program_path, e);
             }
         }
-        Err(e) => {
-            error!("Failed to execute startup program: {}", e);
-        }
-    }
+    });
 }
 
 #[cfg(unix)]
