@@ -454,11 +454,11 @@ impl Shell {
                     
                     // Track focused window rectangle for border rendering
                     if self.focused_window.as_ref() == Some(window) && !workspace.floating_windows.contains(window) {
-                        let rect_size = workspace.window_rectangles.get(window)
-                            .map(|rect| rect.size)
-                            .unwrap_or_else(|| window.bbox().size);
-                        if rect_size.w > 0 && rect_size.h > 0 {
-                            focused_window_rect = Some((location, rect_size));
+                        if let Some(rect) = workspace.window_rectangles.get(window) {
+                            if rect.size.w > 0 && rect.size.h > 0 {
+                                // Use the intended rectangle location, not the actual window location
+                                focused_window_rect = Some((rect.loc, rect.size));
+                            }
                         }
                     }
                 }
@@ -1179,8 +1179,13 @@ impl Shell {
                     // Cache the rectangle for this window
                     workspace.window_rectangles.insert(window.clone(), rect);
                     
-                    // Position the window
-                    self.space.map_element(window.clone(), rect.loc, false);
+                    // Position the window, accounting for CSD shadow offsets
+                    let window_geom = window.geometry();
+                    let position = Point::new(
+                        rect.loc.x - window_geom.loc.x,
+                        rect.loc.y - window_geom.loc.y,
+                    );
+                    self.space.map_element(window.clone(), position, false);
                     
                     // Resize the window if it has a toplevel surface
                     if let Some(toplevel) = window.toplevel() {
@@ -1224,8 +1229,13 @@ impl Shell {
                     // Cache the rectangle
                     workspace.window_rectangles.insert(active_window.clone(), window_rect);
                     
-                    // Map the active window
-                    self.space.map_element(active_window.clone(), window_rect.loc, false);
+                    // Map the active window, accounting for CSD shadow offsets
+                    let window_geom = active_window.geometry();
+                    let position = Point::new(
+                        window_rect.loc.x - window_geom.loc.x,
+                        window_rect.loc.y - window_geom.loc.y,
+                    );
+                    self.space.map_element(active_window.clone(), position, false);
                     
                     // Configure the window
                     if let Some(toplevel) = active_window.toplevel() {

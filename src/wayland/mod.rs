@@ -162,17 +162,37 @@ impl CompositorHandler for State {
                 let mut shell = self.shell.write().unwrap();
                 let output = shell.visible_output_for_surface(surface).cloned();
                 
-                if let Some(window) = shell.space.elements().find(|w| {
+                let geometry_changed = if let Some(window) = shell.space.elements().find(|w| {
                     w.toplevel().unwrap().wl_surface() == surface
                 }) {
+                    // Store old geometry to check if it changed
+                    let old_geom = window.geometry();
+                    
                     window.on_commit();
                     // tracing::debug!("Window surface commit handled");
+                    
+                    // Check if geometry changed (e.g. CSD shadows became available)
+                    let new_geom = window.geometry();
+                    let changed = old_geom != new_geom;
                     
                     // send frame callback to let client know it can render the next frame
                     if let Some(ref output) = output {
                         let clock = Clock::<Monotonic>::new();
                         send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
                         // tracing::debug!("Sent frame callback to window surface");
+                    }
+                    
+                    changed
+                } else {
+                    false
+                };
+                
+                // Mark for re-arrange if geometry changed
+                if geometry_changed {
+                    if let Some(ref output) = output {
+                        if let Some(workspace) = shell.active_workspace_mut(output) {
+                            workspace.needs_arrange = true;
+                        }
                     }
                 }
                 
