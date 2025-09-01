@@ -78,7 +78,7 @@ impl CompositorHandler for State {
                 }; // layer_map dropped here, mutex released
                 
                 if changed {
-                    tracing::debug!("Layer arrangement changed after commit");
+                    //tracing::debug!("Layer arrangement changed after commit");
                     // mark that windows need to be re-arranged
                     let mut shell = self.shell.write().unwrap();
                     if let Some(workspace) = shell.active_workspace_mut(output) {
@@ -89,7 +89,7 @@ impl CompositorHandler for State {
                 }
                 
                 if wants_focus {
-                    tracing::debug!("Layer surface requests keyboard focus");
+                    //tracing::debug!("Layer surface requests keyboard focus");
                     let keyboard = self.seat.get_keyboard().unwrap();
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     keyboard.set_focus(self, Some(surface.clone()), serial);
@@ -100,7 +100,7 @@ impl CompositorHandler for State {
                 send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
                 
                 self.backend.schedule_render(output);
-                tracing::debug!("Layer surface committed, scheduling render for output {}", output.name());
+                //tracing::debug!("Layer surface committed, scheduling render for output {}", output.name());
                 return; // handled as layer surface
             }
         }
@@ -138,7 +138,7 @@ impl CompositorHandler for State {
                     let keyboard = self.seat.get_keyboard().unwrap();
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     keyboard.set_focus(self, Some(toplevel.wl_surface().clone()), serial);
-                    tracing::debug!("Set keyboard focus to new window");
+                    //tracing::debug!("Set keyboard focus to new window");
                     
                     // send initial frame callback
                     let clock = Clock::<Monotonic>::new();
@@ -166,13 +166,13 @@ impl CompositorHandler for State {
                     w.toplevel().unwrap().wl_surface() == surface
                 }) {
                     window.on_commit();
-                    tracing::debug!("Window surface commit handled");
+                    // tracing::debug!("Window surface commit handled");
                     
                     // send frame callback to let client know it can render the next frame
                     if let Some(ref output) = output {
                         let clock = Clock::<Monotonic>::new();
                         send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
-                        tracing::debug!("Sent frame callback to window surface");
+                        // tracing::debug!("Sent frame callback to window surface");
                     }
                 }
                 
@@ -184,10 +184,10 @@ impl CompositorHandler for State {
             
             // schedule render on the output showing this surface
             if let Some(output) = output {
-                tracing::debug!("Scheduling render for output {} after surface commit", output.name());
+                // tracing::debug!("Scheduling render for output {} after surface commit", output.name());
                 self.backend.schedule_render(&output);
             } else {
-                tracing::debug!("No output found for committed surface");
+                // tracing::debug!("No output found for committed surface");
             }
         }
     }

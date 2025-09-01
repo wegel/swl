@@ -369,7 +369,7 @@ impl Surface {
     
     /// Schedule a render for this surface
     pub fn schedule_render(&self) {
-        debug!("Render scheduled for output {}", self.output.name());
+        // debug!("Render scheduled for output {}", self.output.name());
         let _ = self.thread_command.send(ThreadCommand::ScheduleRender);
     }
     
@@ -807,7 +807,7 @@ impl SurfaceThreadState {
             return;
         };
         
-        debug!("queue_redraw_force called for {} (force={})", self.output.name(), force);
+        // debug!("queue_redraw_force called for {} (force={})", self.output.name(), force);
         
         if let QueueState::WaitingForVBlank { .. } = &self.state {
             // we're waiting for VBlank, request a redraw afterwards.
@@ -815,19 +815,19 @@ impl SurfaceThreadState {
             self.state = QueueState::WaitingForVBlank {
                 redraw_needed: true,
             };
-            debug!("Setting redraw_needed=true for {} (waiting for VBlank)", self.output.name());
+            // debug!("Setting redraw_needed=true for {} (waiting for VBlank)", self.output.name());
             return;
         }
         
         if !force {
             match &self.state {
                 QueueState::Idle | QueueState::WaitingForEstimatedVBlank(_) => {
-                    debug!("{}: State allows scheduling (Idle or WaitingForEstimatedVBlank)", self.output.name());
+                    // debug!("{}: State allows scheduling (Idle or WaitingForEstimatedVBlank)", self.output.name());
                 }
                 
                 // a redraw is already queued.
                 QueueState::Queued(_) | QueueState::WaitingForEstimatedVBlankAndQueued { .. } => {
-                    debug!("{}: Skipping - redraw already queued", self.output.name());
+                    //debug!("{}: Skipping - redraw already queued", self.output.name());
                     return;
                 }
                 _ => {
@@ -840,24 +840,24 @@ impl SurfaceThreadState {
         let render_start = self.timings.next_render_time(&self.clock);
         
         let timer = if render_start.is_zero() {
-            debug!("{}: Running late for frame, using immediate timer", self.output.name());
+            // debug!("{}: Running late for frame, using immediate timer", self.output.name());
             Timer::immediate()
         } else {
-            debug!("{}: Scheduling render in {:?}", self.output.name(), render_start);
+            // debug!("{}: Scheduling render in {:?}", self.output.name(), render_start);
             Timer::from_duration(render_start)
         };
         
         let token = self
             .loop_handle
             .insert_source(timer, move |_time, _, state| {
-                debug!("Timer fired for {}, starting render", state.output.name());
+                // debug!("Timer fired for {}, starting render", state.output.name());
                 state.timings.start_render(&state.clock);
                 if let Err(err) = state.redraw(estimated_presentation) {
                     let name = state.output.name();
                     warn!(?name, "Failed to submit rendering: {:?}", err);
                     state.queue_redraw_force(true);
                 } else {
-                    debug!("Render completed successfully for {}", state.output.name());
+                    // debug!("Render completed successfully for {}", state.output.name());
                 }
                 TimeoutAction::Drop
             })
@@ -929,11 +929,11 @@ impl SurfaceThreadState {
                 // note: Often 0 if DRM driver doesn't provide frame counter
                 let sequence = metadata.as_ref()
                     .map(|m| {
-                        debug!("VBlank metadata: sequence={}, time={:?}", m.sequence, m.time);
+                        // debug!("VBlank metadata: sequence={}, time={:?}", m.sequence, m.time);
                         m.sequence
                     })
                     .unwrap_or_else(|| {
-                        debug!("No VBlank metadata available");
+                        // debug!("No VBlank metadata available");
                         0
                     }) as u64;
                 
@@ -1103,7 +1103,7 @@ impl SurfaceThreadState {
             
             // draw cursor (relative to this output)
             let relative_pos = cursor_position - output_loc.to_f64();
-            debug!("Rendering cursor on {} at relative position {:?}", self.output.name(), relative_pos);
+            // debug!("Rendering cursor on {} at relative position {:?}", self.output.name(), relative_pos);
             
             cursor::draw_cursor(
                 &mut renderer,
@@ -1118,31 +1118,15 @@ impl SurfaceThreadState {
             Vec::new()
         };
         
-        debug!("Adding {} cursor elements to render for {}", cursor_elements.len(), self.output.name());
+        // debug!("Adding {} cursor elements to render for {}", cursor_elements.len(), self.output.name());
         
         // add cursor elements to the element list (at the beginning to avoid opaque region culling)
         // cursor should always be visible regardless of what's beneath it
-        for (elem, hotspot) in cursor_elements.into_iter().rev() {
-            // log cursor hotspot and kind for debugging
-            use smithay::backend::renderer::element::Element;
-            let elem_kind = elem.kind();
-            debug!("Cursor element hotspot: {:?}, kind: {:?}", hotspot, elem_kind);
-            
+        for (elem, _hotspot) in cursor_elements.into_iter().rev() {
             // wrap cursor element in CosmicElement
             let cosmic_elem = CosmicElement::Cursor(elem);
-            debug!("CosmicElement cursor kind: {:?}", cosmic_elem.kind());
             elements.insert(0, cosmic_elem);  // insert at beginning
         }
-        
-        // log element kinds for debugging z-order
-        let element_kinds: Vec<_> = elements.iter().map(|e| match e {
-            CosmicElement::Surface(_) => "Surface",
-            CosmicElement::Damage(_) => "Damage", 
-            CosmicElement::Texture(_) => "Texture",
-            CosmicElement::Cursor(_) => "Cursor",
-            CosmicElement::SolidColor(_) => "SolidColor",
-        }).collect();
-        debug!("Element order for {}: {:?}", self.output.name(), element_kinds);
         
         // mark element gathering done
         self.timings.elements_done(&self.clock);
@@ -1172,7 +1156,7 @@ impl SurfaceThreadState {
         // Phase 5a: Choose between direct and offscreen rendering
         if use_direct_render {
             // Phase 5a: Direct rendering path - render directly to DRM framebuffer
-            debug!("[DIRECT] Starting render for {} (VRR={})", self.output.name(), vrr);
+            // debug!("[DIRECT] Starting render for {} (VRR={})", self.output.name(), vrr);
             
             // render directly to the DRM compositor's framebuffer
             // this gives us proper buffer age from the swapchain
@@ -1183,11 +1167,11 @@ impl SurfaceThreadState {
                 FrameFlags::DEFAULT,  // includes cursor plane scanout
             ).map_err(|e| anyhow::anyhow!("Failed to render frame: {:?}", e))?;
             
-            debug!("[DIRECT] Render result for {}: is_empty={}, cursor_element={:?}, overlay_elements={}", 
-                   self.output.name(), 
-                   frame_result.is_empty,
-                   frame_result.cursor_element.is_some(),
-                   frame_result.overlay_elements.len());
+            // debug!("[DIRECT] Render result for {}: is_empty={}, cursor_element={:?}, overlay_elements={}", 
+            //        self.output.name(), 
+            //        frame_result.is_empty,
+            //        frame_result.cursor_element.is_some(),
+            //        frame_result.overlay_elements.len());
             
             // mark submission time
             self.timings.submitted_for_presentation(&self.clock);
@@ -1251,7 +1235,7 @@ impl SurfaceThreadState {
         }
         
         // offscreen rendering path - render to texture first for post-processing
-        debug!("[OFFSCREEN] Starting render for {}", self.output.name());
+        // debug!("[OFFSCREEN] Starting render for {}", self.output.name());
         
         // Phase 2jb: Render to offscreen texture using PostprocessState
         // This follows cosmic-comp's approach exactly
@@ -1341,7 +1325,7 @@ impl SurfaceThreadState {
             FrameFlags::DEFAULT,  // includes cursor plane scanout
         ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
         
-        debug!("[OFFSCREEN] Render result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
+        // debug!("[OFFSCREEN] Render result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
         
         // mark submission time
         self.timings.submitted_for_presentation(&self.clock);
@@ -1384,7 +1368,7 @@ impl SurfaceThreadState {
             }
             Err(smithay::backend::drm::compositor::FrameError::EmptyFrame) => {
                 // empty frame - use estimated VBlank to maintain frame callbacks
-                debug!("[OFFSCREEN] Empty frame for output {}, using estimated VBlank", self.output.name());
+                // debug!("[OFFSCREEN] Empty frame for output {}, using estimated VBlank", self.output.name());
                 
                 // calculate estimated presentation time
                 let estimated_presentation = self.timings.next_presentation_time(&self.clock);

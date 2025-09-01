@@ -213,34 +213,65 @@ impl State {
             InputEvent::PointerButton { event, .. } => {
                 let button = event.button_code();
                 let state = event.state();
-                debug!("Pointer button: {} {:?}", button, state);
+                //debug!("Pointer button: {} {:?}", button, state);
                 
                 // on button press, check if we need to focus a different window
                 if state == ButtonState::Pressed {
                     let pointer_loc = self.seat.get_pointer().unwrap().current_location();
-                    debug!("Button pressed at location: {:?}", pointer_loc);
+                    //debug!("Button pressed at location: {:?}", pointer_loc);
                     
-                    // find window under cursor and focus it
-                    let window_to_focus = {
-                        let shell = self.shell.read().unwrap();
-                        let window = shell.window_under(pointer_loc);
-                        debug!("Window under cursor: {:?}", window.is_some());
-                        window
-                    };
-                    
-                    if let Some(window) = window_to_focus {
-                        // update focus stack and focused window
-                        self.shell.write().unwrap().set_focus(window.clone());
-                        
-                        // set keyboard focus
-                        if let Some(surface) = window.toplevel().and_then(|t| Some(t.wl_surface().clone())) {
-                            let keyboard = self.seat.get_keyboard().unwrap();
-                            let serial = SERIAL_COUNTER.next_serial();
-                            keyboard.set_focus(self, Some(surface), serial);
-                            debug!("Set keyboard focus to clicked window");
+                    // First check if this is a tab click
+                    let mut tab_clicked = false;
+                    let mut tab_surface = None;
+                    if let Some(output) = self.outputs.first() {
+                        let mut shell = self.shell.write().unwrap();
+                        if shell.handle_tab_click(output, pointer_loc) {
+                            tab_clicked = true;
+                            // Update keyboard focus to the active tab
+                            if let Some(workspace) = shell.active_workspace(output) {
+                                if let Some(window) = workspace.tiled_windows().nth(workspace.active_tab_index).cloned() {
+                                    tab_surface = window.toplevel().map(|t| t.wl_surface().clone());
+                                }
+                            }
                         }
-                    } else {
-                        debug!("No window found under cursor for focus");
+                    }
+                    
+                    // Set keyboard focus if tab was clicked
+                    if let Some(surface) = tab_surface {
+                        let keyboard = self.seat.get_keyboard().unwrap();
+                        let serial = SERIAL_COUNTER.next_serial();
+                        keyboard.set_focus(self, Some(surface), serial);
+                    }
+                    
+                    // If not a tab click, handle normal window focus
+                    if !tab_clicked {
+                        // find window under cursor and focus it
+                        let window_to_focus = {
+                            let shell = self.shell.read().unwrap();
+                            let window = shell.window_under(pointer_loc);
+                            //debug!("Window under cursor: {:?}", window.is_some());
+                            window
+                        };
+                        
+                        if let Some(window) = window_to_focus {
+                            // update focus stack and focused window
+                            self.shell.write().unwrap().set_focus(window.clone());
+                            
+                            // set keyboard focus
+                            if let Some(surface) = window.toplevel().and_then(|t| Some(t.wl_surface().clone())) {
+                                let keyboard = self.seat.get_keyboard().unwrap();
+                                let serial = SERIAL_COUNTER.next_serial();
+                                keyboard.set_focus(self, Some(surface), serial);
+                                //debug!("Set keyboard focus to clicked window");
+                            }
+                        } else {
+                            debug!("No window found under cursor for focus");
+                        }
+                    }
+                    
+                    // Schedule render after any tab or focus changes
+                    if let Some(output) = self.outputs.first() {
+                        self.backend.schedule_render(output);
                     }
                 }
                 
@@ -523,6 +554,70 @@ impl State {
                 }
             }
             
+            // tabbed mode
+            ToggleLayoutMode => {
+                if let Some(output) = self.outputs.first() {
+                    let mut shell = self.shell.write().unwrap();
+                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                        workspace.toggle_layout_mode();
+                    }
+                    drop(shell);
+                    self.backend.schedule_render(output);
+                }
+            }
+            NextTab => {
+                if let Some(output) = self.outputs.first().cloned() {
+                    let surface = {
+                        let mut shell = self.shell.write().unwrap();
+                        if let Some(workspace) = shell.active_workspace_mut(&output) {
+                            if let Some(window) = workspace.next_tab() {
+                                shell.focused_window = Some(window.clone());
+                                window.toplevel().map(|t| t.wl_surface().clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    
+                    // Update keyboard focus
+                    if let Some(surface) = surface {
+                        let keyboard = self.seat.get_keyboard().unwrap();
+                        let serial = SERIAL_COUNTER.next_serial();
+                        keyboard.set_focus(self, Some(surface), serial);
+                    }
+                    
+                    self.backend.schedule_render(&output);
+                }
+            }
+            PrevTab => {
+                if let Some(output) = self.outputs.first().cloned() {
+                    let surface = {
+                        let mut shell = self.shell.write().unwrap();
+                        if let Some(workspace) = shell.active_workspace_mut(&output) {
+                            if let Some(window) = workspace.prev_tab() {
+                                shell.focused_window = Some(window.clone());
+                                window.toplevel().map(|t| t.wl_surface().clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    
+                    // Update keyboard focus
+                    if let Some(surface) = surface {
+                        let keyboard = self.seat.get_keyboard().unwrap();
+                        let serial = SERIAL_COUNTER.next_serial();
+                        keyboard.set_focus(self, Some(surface), serial);
+                    }
+                    
+                    self.backend.schedule_render(&output);
+                }
+            }
+            
             // applications
             LaunchTerminal => {
                 info!("Launching terminal");
@@ -589,14 +684,14 @@ impl State {
                             let keyboard = self.seat.get_keyboard().unwrap();
                             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                             keyboard.set_focus(self, Some(surface), serial);
-                            tracing::debug!("Updated keyboard focus after workspace switch");
+                            //tracing::debug!("Updated keyboard focus after workspace switch");
                         }
                     } else {
                         // Clear keyboard focus when no window is focused
                         let keyboard = self.seat.get_keyboard().unwrap();
                         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                         keyboard.set_focus(self, None, serial);
-                        tracing::debug!("Cleared keyboard focus after workspace switch");
+                        //tracing::debug!("Cleared keyboard focus after workspace switch");
                     }
                     
                     self.backend.schedule_render(&output);
@@ -610,14 +705,11 @@ impl State {
                         
                         // Get the focused window
                         if let Some(window) = shell.focused_window.clone() {
-                            // Remove window from current workspace
-                            shell.remove_window(&window);
+                            // Move window to the specific workspace
+                            shell.move_window_to_workspace(window.clone(), name.clone(), &output);
                             
-                            // Switch to target workspace
+                            // Switch to target workspace to see the moved window
                             shell.switch_to_workspace(&output, name.clone());
-                            
-                            // Add window to new workspace
-                            shell.add_window(window.clone(), &output);
                             
                             Some(window)
                         } else {
@@ -631,7 +723,7 @@ impl State {
                             let keyboard = self.seat.get_keyboard().unwrap();
                             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                             keyboard.set_focus(self, Some(surface), serial);
-                            tracing::debug!("Updated keyboard focus after moving window to workspace");
+                            //tracing::debug!("Updated keyboard focus after moving window to workspace");
                         }
                     }
                     

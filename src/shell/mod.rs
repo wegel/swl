@@ -125,6 +125,29 @@ impl Shell {
         self.set_focus(window);
     }
     
+    /// Move a window to a specific workspace
+    pub fn move_window_to_workspace(&mut self, window: Window, workspace_name: String, output: &Output) {
+        // First, remove window from all workspaces
+        self.remove_window(&window);
+        
+        // Get or create the target workspace
+        let workspace = self.get_or_create_workspace(workspace_name.clone());
+        
+        // Determine if window should be floating
+        let floating = should_float_impl(&window);
+        
+        // Add window to the specific workspace
+        workspace.add_window(window.clone(), floating);
+        
+        // If this workspace is currently active on the output, map the window
+        if self.active_workspaces.get(output) == Some(&workspace_name) {
+            self.space.map_element(window.clone(), Point::from((0, 0)), false);
+        }
+        
+        // Set as focused
+        self.set_focus(window);
+    }
+    
     
     /// Get the window under the given point
     pub fn window_under(&self, point: Point<f64, Logical>) -> Option<Window> {
@@ -141,9 +164,9 @@ impl Shell {
                 bbox.size,
             );
             
-            debug!("Checking window bbox at {:?} against point {:?}", global_bbox, point);
+            //debug!("Checking window bbox at {:?} against point {:?}", global_bbox, point);
             if global_bbox.to_f64().contains(point) {
-                debug!("Point is within window bounds!");
+                //debug!("Point is within window bounds!");
                 return Some(window.clone());
             }
         }
@@ -157,7 +180,7 @@ impl Shell {
         use smithay::wayland::shell::wlr_layer::Layer;
         use tracing::trace;
         
-        trace!("Looking for surface under point: {:?}", point);
+        //trace!("Looking for surface under point: {:?}", point);
         
         // Find which output contains the point
         let output = self.space.outputs().find(|o| {
@@ -287,7 +310,7 @@ impl Shell {
     /// Find which output a surface is visible on
     pub fn visible_output_for_surface(&self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> Option<&Output> {
         // find the window containing this surface
-        tracing::debug!("Looking for output for surface");
+        // tracing::debug!("Looking for output for surface");
         for window in self.space.elements() {
             if window.toplevel().unwrap().wl_surface() == surface {
                 // find which output this window is on
@@ -443,6 +466,65 @@ impl Shell {
             
             // Add window elements first (they will render behind borders in front-to-back order)
             elements.extend(window_elements);
+            
+            // Render tab bar if in tabbed mode
+            if matches!(workspace.layout_mode, workspace::LayoutMode::Tabbed) {
+                let tiled: Vec<_> = workspace.tiled_windows().cloned().collect();
+                if !tiled.is_empty() {
+                    let area = workspace.available_area;
+                    let separator_color = [0.1, 0.1, 0.1, 1.0]; // Dark gray separator
+                    
+                    // Render individual tab sections with separators
+                    let tab_width = area.size.w / tiled.len() as i32;
+                    for (i, _window) in tiled.iter().enumerate() {
+                        let is_active = i == workspace.active_tab_index;
+                        let color = if is_active {
+                            FOCUSED_BORDER_COLOR  // Bright blue for active
+                        } else {
+                            UNFOCUSED_BORDER_COLOR  // Darker blue for inactive
+                        };
+                        
+                        let tab_x = area.loc.x + (i as i32 * tab_width);
+                        
+                        // Calculate actual tab width (accounting for separator)
+                        let actual_tab_width = if i < tiled.len() - 1 {
+                            tab_width - 2  // Leave space for 2-pixel separator
+                        } else {
+                            tab_width  // Last tab takes remaining space
+                        };
+                        
+                        // Render the tab
+                        let tab_buffer = SolidColorBuffer::new(
+                            (actual_tab_width, workspace::TAB_HEIGHT),
+                            color,
+                        );
+                        let tab_element = SolidColorRenderElement::from_buffer(
+                            &tab_buffer,
+                            Point::from((tab_x, area.loc.y)).to_physical_precise_round(output_scale),
+                            output_scale,
+                            1.0,
+                            smithay::backend::renderer::element::Kind::Unspecified,
+                        );
+                        elements.push(CosmicElement::SolidColor(tab_element));
+                        
+                        // Render separator after this tab (except for the last tab)
+                        if i < tiled.len() - 1 {
+                            let sep_buffer = SolidColorBuffer::new(
+                                (2, workspace::TAB_HEIGHT),
+                                separator_color,
+                            );
+                            let sep_element = SolidColorRenderElement::from_buffer(
+                                &sep_buffer,
+                                Point::from((tab_x + actual_tab_width, area.loc.y)).to_physical_precise_round(output_scale),
+                                output_scale,
+                                1.0,
+                                smithay::backend::renderer::element::Kind::Unspecified,
+                            );
+                            elements.push(CosmicElement::SolidColor(sep_element));
+                        }
+                    }
+                }
+            }
             
             // Then render borders on top
             
@@ -879,6 +961,18 @@ impl Shell {
         for workspace in self.workspaces.values_mut() {
             if workspace.windows.contains(&window) {
                 workspace.append_focus(&window);
+                
+                // In tabbed mode, also update active_tab_index to match focused window
+                if matches!(workspace.layout_mode, workspace::LayoutMode::Tabbed) {
+                    let idx = workspace.tiled_windows()
+                        .enumerate()
+                        .find(|(_, w)| *w == &window)
+                        .map(|(idx, _)| idx);
+                    if let Some(idx) = idx {
+                        workspace.active_tab_index = idx;
+                    }
+                }
+                
                 break;
             }
         }
@@ -928,7 +1022,7 @@ impl Shell {
         }
         
         // Get workspace info we need
-        let (other_output_to_remove, windows_to_map, focus_target) = {
+        let (other_output_to_remove, windows_to_map, focus_target, _is_tabbed) = {
             let workspace = self.get_or_create_workspace(name.clone());
             
             // Check if workspace was on another output
@@ -953,8 +1047,21 @@ impl Shell {
             // Get windows and focus target
             let windows = workspace.windows.clone();
             let focus = workspace.focus_stack.last().cloned();
+            let is_tabbed = matches!(workspace.layout_mode, workspace::LayoutMode::Tabbed);
             
-            (other_output, windows, focus)
+            // In tabbed mode, ensure active_tab_index is synchronized with the focused window
+            if is_tabbed && focus.is_some() {
+                let focused_window = focus.as_ref().unwrap();
+                let idx = workspace.tiled_windows()
+                    .enumerate()
+                    .find(|(_, w)| *w == focused_window)
+                    .map(|(idx, _)| idx);
+                if let Some(idx) = idx {
+                    workspace.active_tab_index = idx;
+                }
+            }
+            
+            (other_output, windows, focus, is_tabbed)
         };
         
         // Remove from other output if needed
@@ -1010,6 +1117,12 @@ impl Shell {
         // Update the tiling layout with the available area
         workspace.update_output_geometry(available_area);
         
+        // Clean up dead windows first
+        workspace.refresh();
+        
+        // Validate workspace consistency for debugging
+        workspace.validate_consistency();
+        
         // Handle fullscreen window first
         if let Some(fullscreen_window) = &workspace.fullscreen {
             let output_size = output.current_mode()
@@ -1051,44 +1164,93 @@ impl Shell {
         // Get tiled windows
         let windows_to_tile: Vec<_> = workspace.tiled_windows().cloned().collect();
         
-        // Get tile positions
-        let positions = workspace.tiling.tile(&windows_to_tile);
-        
-        // Clear old cached rectangles for tiled windows
-        for window in &windows_to_tile {
-            workspace.window_rectangles.remove(window);
-        }
-        
-        // Apply positions and sizes
-        for (window, rect) in positions {
-            // Cache the rectangle for this window
-            workspace.window_rectangles.insert(window.clone(), rect);
-            
-            // Position the window
-            self.space.map_element(window.clone(), rect.loc, false);
-            
-            // Resize the window if it has a toplevel surface
-            if let Some(toplevel) = window.toplevel() {
-                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
-                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        match workspace.layout_mode {
+            workspace::LayoutMode::Tiling => {
+                // Get tile positions
+                let positions = workspace.tiling.tile(&windows_to_tile);
                 
-                toplevel.with_pending_state(|state| {
-                    state.size = Some(rect.size);
-                    state.bounds = Some(rect.size);
-                    
-                    // Force server-side decorations (no client decorations)
-                    state.decoration_mode = Some(Mode::ServerSide);
-                    
-                    // Set tiled states to remove decorations and inform the client
-                    state.states.set(State::TiledLeft);
-                    state.states.set(State::TiledRight);
-                    state.states.set(State::TiledTop);
-                    state.states.set(State::TiledBottom);
-                });
+                // Clear old cached rectangles for tiled windows
+                for window in &windows_to_tile {
+                    workspace.window_rectangles.remove(window);
+                }
                 
-                // Send the configure event
-                if toplevel.is_initial_configure_sent() {
-                    toplevel.send_configure();
+                // Apply positions and sizes
+                for (window, rect) in positions {
+                    // Cache the rectangle for this window
+                    workspace.window_rectangles.insert(window.clone(), rect);
+                    
+                    // Position the window
+                    self.space.map_element(window.clone(), rect.loc, false);
+                    
+                    // Resize the window if it has a toplevel surface
+                    if let Some(toplevel) = window.toplevel() {
+                        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                        
+                        toplevel.with_pending_state(|state| {
+                            state.size = Some(rect.size);
+                            state.bounds = Some(rect.size);
+                            
+                            // Force server-side decorations (no client decorations)
+                            state.decoration_mode = Some(Mode::ServerSide);
+                            
+                            // Set tiled states to remove decorations and inform the client
+                            state.states.set(State::TiledLeft);
+                            state.states.set(State::TiledRight);
+                            state.states.set(State::TiledTop);
+                            state.states.set(State::TiledBottom);
+                        });
+                        
+                        // Send the configure event
+                        if toplevel.is_initial_configure_sent() {
+                            toplevel.send_configure();
+                        }
+                    }
+                }
+            }
+            workspace::LayoutMode::Tabbed => {
+                // Hide all tiled windows first
+                for window in &windows_to_tile {
+                    self.space.unmap_elem(window);
+                }
+                
+                // Show only the active tab
+                if let Some(active_window) = windows_to_tile.get(workspace.active_tab_index) {
+                    let window_rect = Rectangle {
+                        loc: Point::from((available_area.loc.x, available_area.loc.y + workspace::TAB_HEIGHT)),
+                        size: Size::from((available_area.size.w, available_area.size.h - workspace::TAB_HEIGHT)),
+                    };
+                    
+                    // Cache the rectangle
+                    workspace.window_rectangles.insert(active_window.clone(), window_rect);
+                    
+                    // Map the active window
+                    self.space.map_element(active_window.clone(), window_rect.loc, false);
+                    
+                    // Configure the window
+                    if let Some(toplevel) = active_window.toplevel() {
+                        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+                        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                        
+                        toplevel.with_pending_state(|state| {
+                            state.size = Some(window_rect.size);
+                            state.bounds = Some(window_rect.size);
+                            
+                            // Force server-side decorations (no client decorations)
+                            state.decoration_mode = Some(Mode::ServerSide);
+                            
+                            // Set tiled states to remove decorations and inform the client
+                            state.states.set(State::TiledLeft);
+                            state.states.set(State::TiledRight);
+                            state.states.set(State::TiledTop);
+                            state.states.set(State::TiledBottom);
+                        });
+                        
+                        // Send the configure event
+                        if toplevel.is_initial_configure_sent() {
+                            toplevel.send_configure();
+                        }
+                    }
                 }
             }
         }
@@ -1116,5 +1278,50 @@ impl Shell {
         self.space.unmap_elem(window);
         
         found_output
+    }
+    
+    /// Handle tab click at the given position
+    pub fn handle_tab_click(&mut self, output: &Output, point: Point<f64, Logical>) -> bool {
+        if let Some(workspace) = self.active_workspace_mut(output) {
+            if !matches!(workspace.layout_mode, workspace::LayoutMode::Tabbed) {
+                return false;
+            }
+            
+            let area = workspace.available_area;
+            if point.y >= area.loc.y as f64 
+                && point.y < (area.loc.y + workspace::TAB_HEIGHT) as f64 {
+                
+                let tiled_count = workspace.tiled_windows().count();
+                if tiled_count > 0 {
+                    let tab_width = area.size.w / tiled_count as i32;
+                    let relative_x = (point.x - area.loc.x as f64) as i32;
+                    
+                    // Find which tab was clicked, accounting for separators
+                    for i in 0..tiled_count {
+                        let tab_start = i as i32 * tab_width;
+                        let tab_end = if i < tiled_count - 1 {
+                            tab_start + tab_width - 2  // Account for separator
+                        } else {
+                            (i + 1) as i32 * tab_width  // Last tab takes full width
+                        };
+                        
+                        if relative_x >= tab_start && relative_x < tab_end {
+                            workspace.active_tab_index = i;
+                            workspace.needs_arrange = true;
+                            
+                            // Update focus to the clicked tab
+                            let window = workspace.tiled_windows().nth(i).cloned();
+                            if let Some(window) = window {
+                                workspace.append_focus(&window);
+                                self.focused_window = Some(window);
+                            }
+                            
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 }

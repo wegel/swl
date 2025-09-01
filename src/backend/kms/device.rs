@@ -429,7 +429,7 @@ impl Device {
             .insert_source(notifier, move |event, metadata, state: &mut crate::state::State| {
                 match event {
                     DrmEvent::VBlank(crtc) => {
-                        debug!("VBlank event for CRTC {:?}", crtc);
+                        // debug!("VBlank event for CRTC {:?}", crtc);
                         // forward to the surface via surface manager
                         if let crate::state::BackendData::Kms(kms) = &state.backend {
                             if let Some(device) = kms.drm_devices.get(&node_for_handler) {

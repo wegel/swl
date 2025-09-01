@@ -22,6 +22,11 @@ pub enum Action {
     IncreaseMasterCount,
     DecreaseMasterCount,
     
+    // tabbed mode
+    ToggleLayoutMode,
+    NextTab,
+    PrevTab,
+    
     // applications
     LaunchTerminal,
     LaunchMenu,
@@ -123,6 +128,26 @@ impl Keybindings {
             modkey,
             xkb::KEY_comma,
             Action::DecreaseMasterCount,
+        ));
+        
+        // tabbed mode
+        bindings.push(Keybinding::new(
+            modkey,
+            xkb::KEY_t,
+            Action::ToggleLayoutMode,
+        ));
+        bindings.push(Keybinding::new(
+            modkey,
+            xkb::KEY_Tab,
+            Action::NextTab,
+        ));
+        bindings.push(Keybinding::new(
+            ModifiersState {
+                shift: true,
+                ..modkey
+            },
+            xkb::KEY_Tab,
+            Action::PrevTab,
         ));
         
         // applications
