@@ -14,6 +14,7 @@ mod backend;
 mod environment;
 mod input;
 mod shell;
+mod startup;
 mod state;
 mod wayland;
 use state::State;
@@ -29,6 +30,7 @@ fn main_inner() -> Result<()> {
     // setup logger
     init_logger()?;
     info!("swl starting up!");
+    tracing::debug!("Debug logging is working!");
 
     // init event loop
     let mut event_loop = EventLoop::try_new()
@@ -50,6 +52,9 @@ fn main_inner() -> Result<()> {
 
     // update environment variables for systemd and D-Bus
     environment::update_environment(&state.socket_name);
+
+    // run startup program if configured
+    startup::run_startup_program();
 
     info!("Starting event loop");
     
