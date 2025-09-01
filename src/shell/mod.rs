@@ -5,7 +5,10 @@ pub mod workspace;
 
 use smithay::{
     backend::renderer::{
-        element::{AsRenderElements, RenderElementStates},
+        element::{
+            AsRenderElements, RenderElementStates,
+            solid::{SolidColorRenderElement, SolidColorBuffer},
+        },
         ImportAll, ImportMem, Renderer,
     },
     desktop::{
@@ -24,6 +27,11 @@ use std::collections::HashMap;
 
 use crate::backend::render::element::{AsGlowRenderer, CosmicElement};
 use self::workspace::Workspace;
+
+// Window border configuration
+pub const BORDER_WIDTH: i32 = 1;
+const FOCUSED_BORDER_COLOR: [f32; 4] = [0.0, 0.5, 1.0, 1.0]; // bright blue
+const UNFOCUSED_BORDER_COLOR: [f32; 4] = [0.0, 0.2, 0.5, 1.0]; // darker blue
 
 /// Determine if a window should float by default
 fn should_float_impl(window: &Window) -> bool {
@@ -400,6 +408,11 @@ impl Shell {
         
         // 2. Windows (in the middle) - only from active workspace
         if let Some(workspace) = self.active_workspace(output) {
+            
+            // First, collect all windows to render
+            let mut window_elements = Vec::new();
+            let mut focused_window_rect = None;
+            
             for window in &workspace.windows {
                 if let Some(location) = self.space.element_location(window) {
                     // get surface render elements and wrap them in CosmicElement
@@ -411,10 +424,60 @@ impl Shell {
                     );
                     
                     // wrap each surface element in CosmicElement::Surface
-                    elements.extend(
+                    window_elements.extend(
                         surface_elements.into_iter()
                             .map(|elem| CosmicElement::Surface(elem))
                     );
+                    
+                    // Track focused window rectangle for border rendering
+                    if self.focused_window.as_ref() == Some(window) && !workspace.floating_windows.contains(window) {
+                        let rect_size = workspace.window_rectangles.get(window)
+                            .map(|rect| rect.size)
+                            .unwrap_or_else(|| window.bbox().size);
+                        if rect_size.w > 0 && rect_size.h > 0 {
+                            focused_window_rect = Some((location, rect_size));
+                        }
+                    }
+                }
+            }
+            
+            // Add window elements first (they will render behind borders in front-to-back order)
+            elements.extend(window_elements);
+            
+            // Then render borders on top
+            
+            // 1. Focused window border overlay
+            if let Some((location, rect_size)) = focused_window_rect {
+                let border_buffer = SolidColorBuffer::new(
+                    (rect_size.w + 2 * BORDER_WIDTH, rect_size.h + 2 * BORDER_WIDTH),
+                    FOCUSED_BORDER_COLOR
+                );
+                let border_element = SolidColorRenderElement::from_buffer(
+                    &border_buffer,
+                    (location - Point::from((BORDER_WIDTH, BORDER_WIDTH))).to_physical_precise_round(output_scale),
+                    output_scale,
+                    1.0,
+                    smithay::backend::renderer::element::Kind::Unspecified,
+                );
+                elements.push(CosmicElement::SolidColor(border_element));
+            }
+            
+            // 2. Background with unfocused border color for the entire tiling area
+            if !workspace.windows.is_empty() {
+                let available_area = workspace.available_area;
+                if available_area.size.w > 0 && available_area.size.h > 0 {
+                    let background_buffer = SolidColorBuffer::new(
+                        (available_area.size.w, available_area.size.h),
+                        UNFOCUSED_BORDER_COLOR
+                    );
+                    let background_element = SolidColorRenderElement::from_buffer(
+                        &background_buffer,
+                        available_area.loc.to_physical_precise_round(output_scale),
+                        output_scale,
+                        1.0,
+                        smithay::backend::renderer::element::Kind::Unspecified,
+                    );
+                    elements.push(CosmicElement::SolidColor(background_element));
                 }
             }
         }
@@ -600,6 +663,8 @@ impl Shell {
                 tracing::debug!("Window no longer floating");
             } else {
                 workspace.floating_windows.insert(window.clone());
+                // Remove cached rectangle since it's now floating
+                workspace.window_rectangles.remove(window);
                 
                 // clear tiled states when window becomes floating
                 if let Some(toplevel) = window.toplevel() {
@@ -923,16 +988,28 @@ impl Shell {
     
     /// Arrange windows on the given output according to the tiling layout
     pub fn arrange_windows_on_output(&mut self, output: &Output) {
+        tracing::info!("arrange_windows_on_output called for output {}", output.name());
         // Get the active workspace for this output
         let workspace_name = match self.active_workspaces.get(output).cloned() {
             Some(name) => name,
-            None => return, // No active workspace on this output
+            None => {
+                tracing::warn!("No active workspace on output {}", output.name());
+                return; // No active workspace on this output
+            }
         };
         
         let workspace = match self.workspaces.get_mut(&workspace_name) {
             Some(ws) => ws,
             None => return,
         };
+        
+        // Calculate and cache the available area
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        let available_area = layer_map.non_exclusive_zone();
+        workspace.available_area = available_area;
+        
+        // Update the tiling layout with the available area
+        workspace.update_output_geometry(available_area);
         
         // Handle fullscreen window first
         if let Some(fullscreen_window) = &workspace.fullscreen {
@@ -978,8 +1055,16 @@ impl Shell {
         // Get tile positions
         let positions = workspace.tiling.tile(&windows_to_tile);
         
+        // Clear old cached rectangles for tiled windows
+        for window in &windows_to_tile {
+            workspace.window_rectangles.remove(window);
+        }
+        
         // Apply positions and sizes
         for (window, rect) in positions {
+            // Cache the rectangle for this window
+            workspace.window_rectangles.insert(window.clone(), rect);
+            
             // Position the window
             self.space.map_element(window.clone(), rect.loc, false);
             

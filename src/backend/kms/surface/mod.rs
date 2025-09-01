@@ -1021,7 +1021,7 @@ impl SurfaceThreadState {
     
     /// Perform a redraw with damage tracking using PostprocessState
     fn redraw(&mut self, _estimated_presentation: Duration) -> Result<()> {
-        debug!("Starting redraw for {}", self.output.name());
+        tracing::info!("Starting redraw for {}", self.output.name());
         
         // check we have a compositor first
         if self.compositor.is_none() {
@@ -1060,7 +1060,6 @@ impl SurfaceThreadState {
             // Check if active workspace needs arrangement
             if let Some(workspace) = shell.active_workspace(&self.output) {
                 if workspace.needs_arrange {
-                    debug!("Windows need arrangement before render");
                     drop(shell);
                     let mut shell = self.shell.write().unwrap();
                     shell.arrange_windows_on_output(&self.output);
@@ -1143,6 +1142,7 @@ impl SurfaceThreadState {
             CosmicElement::Damage(_) => "Damage", 
             CosmicElement::Texture(_) => "Texture",
             CosmicElement::Cursor(_) => "Cursor",
+            CosmicElement::SolidColor(_) => "SolidColor",
         }).collect();
         debug!("Element order for {}: {:?}", self.output.name(), element_kinds);
         

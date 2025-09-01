@@ -5,7 +5,7 @@ use smithay::{
     output::Output,
     utils::{IsAlive, Logical, Rectangle, Size},
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::tiling::TilingLayout;
 
@@ -36,6 +36,12 @@ pub struct Workspace {
     
     /// Flag indicating windows need re-arrangement
     pub needs_arrange: bool,
+    
+    /// Cached window rectangles from last tiling arrangement
+    pub window_rectangles: HashMap<Window, Rectangle<i32, Logical>>,
+    
+    /// Cached available area (non-exclusive zone) from last arrangement
+    pub available_area: Rectangle<i32, Logical>,
 }
 
 impl Workspace {
@@ -50,6 +56,8 @@ impl Workspace {
             tiling: TilingLayout::new(Rectangle::from_size(Size::from((1920, 1080)))), // default size
             floating_windows: HashSet::new(),
             needs_arrange: false,
+            window_rectangles: HashMap::new(),
+            available_area: Rectangle::from_size(Size::from((1920, 1080))), // default size
         }
     }
     
@@ -75,6 +83,9 @@ impl Workspace {
         // Remove from floating set
         self.floating_windows.remove(window);
         
+        // Remove from cached rectangles
+        self.window_rectangles.remove(window);
+        
         // Clear fullscreen if it was this window
         if self.fullscreen.as_ref() == Some(window) {
             self.fullscreen = None;
@@ -99,6 +110,7 @@ impl Workspace {
         self.windows.retain(|w| w.alive());
         self.focus_stack.retain(|w| w.alive());
         self.floating_windows.retain(|w| w.alive());
+        self.window_rectangles.retain(|w, _| w.alive());
         
         if let Some(fullscreen) = &self.fullscreen {
             if !fullscreen.alive() {

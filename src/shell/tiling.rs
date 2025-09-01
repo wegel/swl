@@ -6,6 +6,9 @@ use smithay::{
 };
 use tracing::debug;
 
+// Import border width from shell module
+use crate::shell::BORDER_WIDTH;
+
 /// Tiling layout implementation inspired by dwm/dwl
 #[derive(Debug)]
 pub struct TilingLayout {
@@ -60,41 +63,113 @@ impl TilingLayout {
         let area_width = self.available_area.size.w;
         let area_height = self.available_area.size.h;
         
-        // calculate master area width
-        let master_width = if n > self.n_master {
-            (area_width as f32 * self.master_factor) as i32
+        // Calculate space available for windows (excluding all borders)
+        let (master_window_width, stack_window_width) = if n > self.n_master {
+            // We have 2 columns, so need 3 borders: left, middle, right
+            let total_window_space = area_width - 3 * BORDER_WIDTH;
+            
+            // Master gets its portion, rounded up (gets remainder pixel)
+            let master_w = ((total_window_space as f32 * self.master_factor).ceil() as i32).max(1);
+            let stack_w = (total_window_space - master_w).max(1);
+            
+            (master_w, stack_w)
         } else {
-            area_width
+            // Single column, just 2 borders: left and right
+            let window_w = area_width - 2 * BORDER_WIDTH;
+            (window_w, 0)
         };
         
         // tile master windows (left side)
-        let mut master_y = 0;
         let master_count = n.min(self.n_master);
         
+        // Calculate vertical space for master windows
+        let total_height_space = area_height - (master_count + 1) as i32 * BORDER_WIDTH;
+        
         for i in 0..master_count {
-            let height = (area_height - master_y) / (master_count - i) as i32;
+            // Calculate window position
+            let x = area_x + BORDER_WIDTH;
+            
+            // Calculate height for this window - first window gets remainder pixels
+            let base_height = total_height_space / master_count as i32;
+            let remainder = total_height_space % master_count as i32;
+            let h = if i == 0 {
+                base_height + remainder
+            } else {
+                base_height
+            };
+            
+            // Calculate Y position
+            let y = if i == 0 {
+                area_y + BORDER_WIDTH
+            } else {
+                // Sum heights of previous windows plus borders
+                let mut y_pos = area_y + BORDER_WIDTH;
+                for j in 0..i {
+                    let prev_h = if j == 0 {
+                        base_height + remainder
+                    } else {
+                        base_height
+                    };
+                    y_pos += prev_h + BORDER_WIDTH;
+                }
+                y_pos
+            };
+            
+            let w = master_window_width;
+            
             let rect = Rectangle::new(
-                (area_x, area_y + master_y).into(),
-                (master_width, height).into(),
+                (x, y).into(),
+                (w.max(1), h.max(1)).into(), // ensure minimum size
             );
             positions.push((windows[i].clone(), rect));
-            master_y += height;
         }
         
         // tile stack windows (right side)
         if n > self.n_master {
-            let stack_width = area_width - master_width;
             let stack_count = n - self.n_master;
-            let mut stack_y = 0;
             
-            for i in self.n_master..n {
-                let height = (area_height - stack_y) / (stack_count - (i - self.n_master)) as i32;
+            // Calculate vertical space for stack windows
+            let total_height_space = area_height - (stack_count + 1) as i32 * BORDER_WIDTH;
+            
+            for i in 0..stack_count {
+                let stack_i = i + self.n_master;
+                
+                // Stack X position: master windows + left border + master width + middle border
+                let x = area_x + BORDER_WIDTH + master_window_width + BORDER_WIDTH;
+                
+                // Calculate height for this window - first window gets remainder pixels
+                let base_height = total_height_space / stack_count as i32;
+                let remainder = total_height_space % stack_count as i32;
+                let h = if i == 0 {
+                    base_height + remainder
+                } else {
+                    base_height
+                };
+                
+                // Calculate Y position
+                let y = if i == 0 {
+                    area_y + BORDER_WIDTH
+                } else {
+                    // Sum heights of previous windows plus borders
+                    let mut y_pos = area_y + BORDER_WIDTH;
+                    for j in 0..i {
+                        let prev_h = if j == 0 {
+                            base_height + remainder
+                        } else {
+                            base_height
+                        };
+                        y_pos += prev_h + BORDER_WIDTH;
+                    }
+                    y_pos
+                };
+                
+                let w = stack_window_width;
+                
                 let rect = Rectangle::new(
-                    (area_x + master_width, area_y + stack_y).into(),
-                    (stack_width, height).into(),
+                    (x, y).into(),
+                    (w.max(1), h.max(1)).into(), // ensure minimum size
                 );
-                positions.push((windows[i].clone(), rect));
-                stack_y += height;
+                positions.push((windows[stack_i].clone(), rect));
             }
         }
         

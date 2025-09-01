@@ -5,6 +5,7 @@ use smithay::{
         element::{
             surface::WaylandSurfaceRenderElement,
             texture::TextureRenderElement,
+            solid::SolidColorRenderElement,
             Element, Id, Kind, RenderElement, UnderlyingStorage,
         },
         gles::{GlesError, GlesTexture},
@@ -189,6 +190,8 @@ where
     Texture(TextureRenderElement<GlesTexture>),
     /// Cursor element
     Cursor(CursorRenderElement<R>),
+    /// Solid color element (for borders, backgrounds, etc)
+    SolidColor(SolidColorRenderElement),
 }
 
 impl<R> Element for CosmicElement<R>
@@ -202,6 +205,7 @@ where
             CosmicElement::Damage(elem) => elem.id(),
             CosmicElement::Texture(elem) => elem.id(),
             CosmicElement::Cursor(elem) => elem.id(),
+            CosmicElement::SolidColor(elem) => elem.id(),
         }
     }
 
@@ -211,6 +215,7 @@ where
             CosmicElement::Damage(elem) => elem.current_commit(),
             CosmicElement::Texture(elem) => elem.current_commit(),
             CosmicElement::Cursor(elem) => elem.current_commit(),
+            CosmicElement::SolidColor(elem) => elem.current_commit(),
         }
     }
 
@@ -220,6 +225,7 @@ where
             CosmicElement::Damage(elem) => elem.src(),
             CosmicElement::Texture(elem) => elem.src(),
             CosmicElement::Cursor(elem) => elem.src(),
+            CosmicElement::SolidColor(elem) => elem.src(),
         }
     }
 
@@ -229,6 +235,7 @@ where
             CosmicElement::Damage(elem) => elem.geometry(scale),
             CosmicElement::Texture(elem) => elem.geometry(scale),
             CosmicElement::Cursor(elem) => elem.geometry(scale),
+            CosmicElement::SolidColor(elem) => elem.geometry(scale),
         }
     }
 
@@ -238,6 +245,7 @@ where
             CosmicElement::Damage(elem) => elem.location(scale),
             CosmicElement::Texture(elem) => elem.location(scale),
             CosmicElement::Cursor(elem) => elem.location(scale),
+            CosmicElement::SolidColor(elem) => elem.location(scale),
         }
     }
 
@@ -247,6 +255,7 @@ where
             CosmicElement::Damage(elem) => elem.transform(),
             CosmicElement::Texture(elem) => elem.transform(),
             CosmicElement::Cursor(elem) => elem.transform(),
+            CosmicElement::SolidColor(elem) => elem.transform(),
         }
     }
 
@@ -256,6 +265,7 @@ where
             CosmicElement::Damage(elem) => elem.damage_since(scale, commit),
             CosmicElement::Texture(elem) => elem.damage_since(scale, commit),
             CosmicElement::Cursor(elem) => elem.damage_since(scale, commit),
+            CosmicElement::SolidColor(elem) => elem.damage_since(scale, commit),
         }
     }
 
@@ -265,6 +275,7 @@ where
             CosmicElement::Damage(elem) => elem.opaque_regions(scale),
             CosmicElement::Texture(elem) => elem.opaque_regions(scale),
             CosmicElement::Cursor(elem) => elem.opaque_regions(scale),
+            CosmicElement::SolidColor(elem) => elem.opaque_regions(scale),
         }
     }
 
@@ -274,6 +285,7 @@ where
             CosmicElement::Damage(elem) => elem.alpha(),
             CosmicElement::Texture(elem) => elem.alpha(),
             CosmicElement::Cursor(elem) => elem.alpha(),
+            CosmicElement::SolidColor(elem) => elem.alpha(),
         }
     }
 
@@ -283,6 +295,7 @@ where
             CosmicElement::Damage(elem) => elem.kind(),
             CosmicElement::Texture(elem) => elem.kind(),
             CosmicElement::Cursor(elem) => elem.kind(),
+            CosmicElement::SolidColor(elem) => elem.kind(),
         }
     }
 }
@@ -313,6 +326,14 @@ where
                 opaque_regions,
             ).map_err(R::Error::from_gles_error),
             CosmicElement::Cursor(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
+            CosmicElement::SolidColor(elem) => <SolidColorRenderElement as RenderElement<GlowRenderer>>::draw(
+                elem,
+                R::glow_frame_mut(frame),
+                src,
+                dst,
+                damage,
+                opaque_regions,
+            ).map_err(R::Error::from_gles_error),
         }
     }
     
@@ -322,6 +343,7 @@ where
             CosmicElement::Damage(_) => None,  // DamageElement has no underlying storage
             CosmicElement::Texture(_) => None, // TextureRenderElement doesn't provide underlying storage for external renderers
             CosmicElement::Cursor(elem) => elem.underlying_storage(renderer),
+            CosmicElement::SolidColor(_) => None, // SolidColorRenderElement has no underlying storage
         }
     }
 }
