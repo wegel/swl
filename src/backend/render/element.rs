@@ -6,6 +6,7 @@ use smithay::{
             surface::WaylandSurfaceRenderElement,
             texture::TextureRenderElement,
             solid::SolidColorRenderElement,
+            utils::RelocateRenderElement,
             Element, Id, Kind, RenderElement, UnderlyingStorage,
         },
         gles::{GlesError, GlesTexture},
@@ -188,8 +189,8 @@ where
     Damage(DamageElement),
     /// Texture element for offscreen rendering composition
     Texture(TextureRenderElement<GlesTexture>),
-    /// Cursor element
-    Cursor(CursorRenderElement<R>),
+    /// Cursor element (wrapped with relocate for hotspot offset)
+    Cursor(RelocateRenderElement<CursorRenderElement<R>>),
     /// Solid color element (for borders, backgrounds, etc)
     SolidColor(SolidColorRenderElement),
 }

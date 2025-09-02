@@ -21,6 +21,7 @@ use smithay::{
             damage::{OutputDamageTracker, Error as RenderError},
             element::{
                 texture::{TextureRenderBuffer, TextureRenderElement},
+                utils::{RelocateRenderElement, Relocate},
                 Kind, RenderElementStates,
             },
             glow::GlowRenderer,
@@ -1122,9 +1123,15 @@ impl SurfaceThreadState {
         
         // add cursor elements to the element list (at the beginning to avoid opaque region culling)
         // cursor should always be visible regardless of what's beneath it
-        for (elem, _hotspot) in cursor_elements.into_iter().rev() {
+        for (elem, hotspot) in cursor_elements.into_iter().rev() {
+            // apply hotspot offset to position cursor correctly
+            let relocated_elem = RelocateRenderElement::from_element(
+                elem,
+                (-hotspot.x, -hotspot.y),
+                Relocate::Relative,
+            );
             // wrap cursor element in CosmicElement
-            let cosmic_elem = CosmicElement::Cursor(elem);
+            let cosmic_elem = CosmicElement::Cursor(relocated_elem);
             elements.insert(0, cosmic_elem);  // insert at beginning
         }
         
