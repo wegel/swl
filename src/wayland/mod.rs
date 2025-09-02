@@ -6,6 +6,7 @@ pub mod primary_selection;
 pub mod xdg_activation;
 pub mod fractional_scale;
 pub mod data_control;
+pub mod output_configuration;
 
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
@@ -573,3 +574,7 @@ delegate_relative_pointer!(State);
 delegate_text_input_manager!(State);
 
 // we already implement SeatHandler in input/mod.rs
+
+// delegate output configuration protocol
+use crate::delegate_output_configuration;
+delegate_output_configuration!(State);

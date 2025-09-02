@@ -22,6 +22,9 @@ smithay = { git = "https://github.com/smithay/smithay.git", rev = "20d2dac", def
     "renderer_multi",
 ] }
 
+# Wayland protocol extensions
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+
 # Dependencies for backend
 indexmap = "2.10"
 libc = "0.2"

@@ -5,6 +5,7 @@ use crate::{
     backend::render::cursor::{CursorState, CursorStateInner},
     input::keybindings::Keybindings,
     shell::Shell,
+    wayland::output_configuration::{OutputConfigurationState, OutputConfigurationHandler, OutputConfiguration},
 };
 use std::sync::{Arc, Mutex, RwLock};
 use smithay::{
@@ -82,6 +83,7 @@ pub struct State {
     pub dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
     #[allow(dead_code)] // will be used for output configuration protocol
     pub output_manager_state: OutputManagerState,
+    pub output_configuration_state: OutputConfigurationState,
     #[allow(dead_code)] // used by presentation feedback protocol
     pub presentation_state: PresentationState,
     pub shell: Arc<RwLock<Shell>>,
@@ -122,6 +124,102 @@ impl State {
     }
 }
 
+impl OutputConfigurationHandler for State {
+    fn output_configuration_state(&mut self) -> &mut OutputConfigurationState {
+        &mut self.output_configuration_state
+    }
+    
+    fn test_configuration(&mut self, configs: Vec<(Output, OutputConfiguration)>) -> bool {
+        // for now, we'll accept any valid configuration
+        // in the future, we could test if the mode is actually supported, etc.
+        tracing::info!("Testing output configuration with {} outputs", configs.len());
+        for (output, config) in &configs {
+            match config {
+                OutputConfiguration::Enabled { mode, position, scale, transform, .. } => {
+                    tracing::info!(
+                        "Output {}: mode={:?}, pos={:?}, scale={:?}, transform={:?}",
+                        output.name(), mode, position, scale, transform
+                    );
+                }
+                OutputConfiguration::Disabled => {
+                    tracing::info!("Output {} would be disabled", output.name());
+                }
+            }
+        }
+        true
+    }
+    
+    fn apply_configuration(&mut self, configs: Vec<(Output, OutputConfiguration)>) -> bool {
+        tracing::info!("Applying output configuration to {} outputs", configs.len());
+        
+        // apply each output configuration
+        for (output, config) in configs {
+            match config {
+                OutputConfiguration::Enabled { mode, position, scale, transform, .. } => {
+                    // apply mode if specified
+                    if let Some(mode_config) = mode {
+                        match mode_config {
+                            crate::wayland::output_configuration::ModeConfiguration::Mode(mode) => {
+                                output.change_current_state(Some(mode), None, None, None);
+                                tracing::info!("Set mode for {}: {}x{}@{}", 
+                                    output.name(), mode.size.w, mode.size.h, mode.refresh);
+                            }
+                            crate::wayland::output_configuration::ModeConfiguration::Custom { size, refresh } => {
+                                // custom modes not yet supported in our backend
+                                tracing::warn!("Custom mode {}x{}@{:?} not yet supported", 
+                                    size.w, size.h, refresh);
+                            }
+                        }
+                    }
+                    
+                    // apply position if specified
+                    if let Some(pos) = position {
+                        output.change_current_state(None, None, None, Some(pos));
+                        tracing::info!("Set position for {}: {:?}", output.name(), pos);
+                    }
+                    
+                    // apply scale if specified
+                    if let Some(scale_val) = scale {
+                        let scale = smithay::output::Scale::Fractional(scale_val);
+                        output.change_current_state(None, None, Some(scale), None);
+                        tracing::info!("Set scale for {}: {}", output.name(), scale_val);
+                    }
+                    
+                    // apply transform if specified
+                    if let Some(transform_val) = transform {
+                        output.change_current_state(None, Some(transform_val), None, None);
+                        tracing::info!("Set transform for {}: {:?}", output.name(), transform_val);
+                    }
+                }
+                OutputConfiguration::Disabled => {
+                    // disabling outputs not yet implemented
+                    // would need to remove from shell, stop rendering, etc.
+                    tracing::warn!("Disabling output {} not yet implemented", output.name());
+                }
+            }
+        }
+        
+        // update output configuration state
+        self.output_configuration_state.update();
+        
+        // trigger re-arrangement of windows
+        let mut shell = self.shell.write().unwrap();
+        for output in &self.outputs {
+            if let Some(workspace) = shell.active_workspace_mut(output) {
+                workspace.needs_arrange = true;
+            }
+        }
+        drop(shell);
+        
+        // schedule render for all outputs
+        for output in &self.outputs {
+            self.backend.schedule_render(output);
+        }
+        
+        true
+    }
+}
+
 impl BackendData {
     /// Schedule a render for the given output
     pub fn schedule_render(&mut self, output: &Output) {
@@ -149,6 +247,7 @@ impl State {
         let data_device_state = DataDeviceState::new::<State>(&display_handle);
         let dmabuf_state = DmabufState::new();
         let output_manager_state = OutputManagerState::new_with_xdg_output::<State>(&display_handle);
+        let output_configuration_state = OutputConfigurationState::new(&display_handle, |_| true);
         
         // create seat state and the default seat
         let mut seat_state = SeatState::new();
@@ -201,6 +300,7 @@ impl State {
             dmabuf_state,
             dmabuf_global: None,
             output_manager_state,
+            output_configuration_state,
             presentation_state,
             shell,
             outputs: Vec::new(),
@@ -406,6 +506,10 @@ impl State {
                         }
                         // add outputs to our state
                         self.outputs.extend(outputs.clone());
+                        
+                        // register outputs with output configuration protocol
+                        self.output_configuration_state.add_heads(outputs.iter());
+                        self.output_configuration_state.update();
                         
                         // schedule initial render for each output
                         for output in outputs {
