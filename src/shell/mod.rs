@@ -402,6 +402,15 @@ impl Shell {
         
         use smithay::wayland::shell::wlr_layer::Layer;
         
+        // Check if we have a focused fullscreen window on this output
+        let has_focused_fullscreen = self.active_workspace(output)
+            .and_then(|ws| ws.fullscreen.as_ref())
+            .map(|fullscreen_window| {
+                // Check if the fullscreen window is the currently focused window
+                self.focused_window.as_ref() == Some(fullscreen_window)
+            })
+            .unwrap_or(false);
+        
         // render layer surfaces in correct order
         let layer_map = smithay::desktop::layer_map_for_output(output);
         let layers: Vec<_> = layer_map.layers().cloned().collect();
@@ -409,10 +418,10 @@ impl Shell {
         // elements should be in front-to-back order for smithay's damage tracker
         // (first element is topmost, last element is bottommost)
         
-        // 1. Top and Overlay layers (topmost, in front of windows)
+        // 1. Overlay layers always render (topmost)
         for layer_surface in &layers {
             let layer = layer_surface.layer();
-            if layer == Layer::Top || layer == Layer::Overlay {
+            if layer == Layer::Overlay {
                 if let Some(geometry) = layer_map.layer_geometry(layer_surface) {
                     let surface_elements = layer_surface.render_elements(
                         renderer,
@@ -425,6 +434,28 @@ impl Shell {
                         surface_elements.into_iter()
                             .map(|elem| CosmicElement::Surface(elem))
                     );
+                }
+            }
+        }
+        
+        // 2. Top layers - skip if there's a focused fullscreen window
+        if !has_focused_fullscreen {
+            for layer_surface in &layers {
+                let layer = layer_surface.layer();
+                if layer == Layer::Top {
+                    if let Some(geometry) = layer_map.layer_geometry(layer_surface) {
+                        let surface_elements = layer_surface.render_elements(
+                            renderer,
+                            geometry.loc.to_physical_precise_round(output_scale),
+                            output_scale,
+                            1.0, // alpha
+                        );
+                        
+                        elements.extend(
+                            surface_elements.into_iter()
+                                .map(|elem| CosmicElement::Surface(elem))
+                        );
+                    }
                 }
             }
         }
@@ -565,9 +596,10 @@ impl Shell {
         }
         
         // 3. Background and Bottom layers (bottommost, behind windows)
+        // Skip Bottom layer if there's a focused fullscreen window, but always render Background
         for layer_surface in &layers {
             let layer = layer_surface.layer();
-            if layer == Layer::Background || layer == Layer::Bottom {
+            if layer == Layer::Background || (layer == Layer::Bottom && !has_focused_fullscreen) {
                 if let Some(geometry) = layer_map.layer_geometry(layer_surface) {
                     let surface_elements = layer_surface.render_elements(
                         renderer,
