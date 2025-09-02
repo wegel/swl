@@ -15,6 +15,7 @@ pub enum Action {
     Zoom,
     CloseWindow,
     ToggleFloating,
+    Fullscreen,
     
     // layout control
     IncreaseMasterWidth,
@@ -106,6 +107,11 @@ impl Keybindings {
             },
             xkb::KEY_space,
             Action::ToggleFloating,
+        ));
+        bindings.push(Keybinding::new(
+            modkey,
+            xkb::KEY_f,
+            Action::Fullscreen,
         ));
         
         // layout control

@@ -623,6 +623,16 @@ impl State {
                     self.backend.schedule_render(&output);
                 }
             }
+            Fullscreen => {
+                let mut shell = self.shell.write().unwrap();
+                // Use first output for now (single monitor)
+                if let Some(output) = self.outputs.first() {
+                    shell.toggle_fullscreen(output);
+                    // Drop shell lock before scheduling render (following cosmic-comp pattern)
+                    std::mem::drop(shell);
+                    self.backend.schedule_render(output);
+                }
+            }
             
             // applications
             LaunchTerminal => {

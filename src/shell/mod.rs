@@ -301,6 +301,32 @@ impl Shell {
         self.arrange_windows_on_output(output);
     }
     
+    /// Toggle fullscreen for the focused window
+    pub fn toggle_fullscreen(&mut self, output: &Output) {
+        // Get the currently focused window
+        let focused_window = self.focused_window.clone();
+        
+        if let Some(focused_window) = focused_window {
+            if let Some(workspace) = self.active_workspace_mut(output) {
+                // Check if the focused window is already fullscreen
+                let is_fullscreen = workspace.fullscreen.as_ref() == Some(&focused_window);
+                
+                if is_fullscreen {
+                    // Unfullscreen the window
+                    workspace.fullscreen = None;
+                } else {
+                    // Fullscreen the focused window
+                    workspace.fullscreen = Some(focused_window);
+                }
+                
+                workspace.needs_arrange = true;
+            }
+            
+            // Arrange windows after fullscreen change
+            self.arrange_windows_on_output(output);
+        }
+    }
+    
     
     /// Refresh the space (needed for damage tracking)
     pub fn refresh(&mut self) {
