@@ -16,6 +16,7 @@ use smithay::{
     },
     desktop::{
         Window,
+        PopupManager,
         utils::{
             update_surface_primary_scanout_output,
             with_surfaces_surface_tree,
@@ -32,6 +33,7 @@ use smithay::{
         selection::{
             data_device::DataDeviceState,
             primary_selection::PrimarySelectionState,
+            wlr_data_control::DataControlState,
         },
         shell::{
             xdg::{XdgShellState, ToplevelSurface},
@@ -85,6 +87,7 @@ pub struct State {
     pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
     pub pending_windows: Vec<(ToplevelSurface, Window)>,
+    pub popups: PopupManager,
     #[allow(dead_code)] // will be used for server-side cursor rendering
     pub cursor_state: CursorState,
     pub keybindings: Keybindings,
@@ -101,6 +104,8 @@ pub struct State {
     pub text_input_manager_state: TextInputManagerState,
     #[allow(dead_code)]
     pub primary_selection_state: PrimarySelectionState,
+    #[allow(dead_code)]
+    pub data_control_state: DataControlState,
     #[allow(dead_code)]
     pub xdg_activation_state: XdgActivationState,
     #[allow(dead_code)]
@@ -173,6 +178,7 @@ impl State {
         let relative_pointer_manager_state = RelativePointerManagerState::new::<State>(&display_handle);
         let text_input_manager_state = TextInputManagerState::new::<State>(&display_handle);
         let primary_selection_state = PrimarySelectionState::new::<State>(&display_handle);
+        let data_control_state = DataControlState::new::<State, _>(&display_handle, Some(&primary_selection_state), |_| true);
         let xdg_activation_state = XdgActivationState::new::<State>(&display_handle);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<State>(&display_handle);
         let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
@@ -199,6 +205,7 @@ impl State {
             shell,
             outputs: Vec::new(),
             pending_windows: Vec::new(),
+            popups: PopupManager::default(),
             cursor_state: Mutex::new(CursorStateInner::default()),
             keybindings: Keybindings::new(),
             session_active: false,
@@ -208,6 +215,7 @@ impl State {
             relative_pointer_manager_state,
             text_input_manager_state,
             primary_selection_state,
+            data_control_state,
             xdg_activation_state,
             fractional_scale_manager_state,
             cursor_shape_manager_state,

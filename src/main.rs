@@ -125,7 +125,7 @@ fn init_wayland_display(
                     std::sync::Arc::new(crate::wayland::handlers::ClientState::new())
                 ) {
                 Ok(client) => {
-                    tracing::info!("New Wayland client connected: {:?}", client.id());
+                    tracing::trace!("New Wayland client connected: {:?}", client.id());
                 }
                 Err(err) => {
                     tracing::error!("Failed to insert client: {}", err);

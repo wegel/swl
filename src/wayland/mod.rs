@@ -5,14 +5,20 @@ pub mod layer_shell;
 pub mod primary_selection;
 pub mod xdg_activation;
 pub mod fractional_scale;
+pub mod data_control;
 
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_data_device, delegate_output, delegate_presentation, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_decoration,
     delegate_viewporter, delegate_pointer_gestures, delegate_relative_pointer, delegate_text_input_manager,
     delegate_cursor_shape,
-    desktop::{Window, WindowSurfaceType, utils::send_frames_surface_tree, space::SpaceElement},
+    desktop::{
+        Window, WindowSurfaceType, PopupKind, 
+        utils::send_frames_surface_tree, space::SpaceElement,
+        find_popup_root_surface, PopupKeyboardGrab, PopupPointerGrab, PopupUngrabStrategy,
+    },
     output::Output,
+    input::{Seat, pointer::Focus},
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
     utils::{Clock, Monotonic, Size},
@@ -119,6 +125,24 @@ impl CompositorHandler for State {
                 window.refresh();
                 
                 if let Some(output) = self.outputs.first().cloned() {
+                    // Get app_id and title for debugging
+                    use smithay::wayland::compositor::with_states;
+                    use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+                    
+                    let (app_id, title) = with_states(toplevel.wl_surface(), |states| {
+                        if let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() {
+                            let data = data.lock().unwrap();
+                            (data.app_id.clone(), data.title.clone())
+                        } else {
+                            (None, None)
+                        }
+                    });
+                    let geometry = window.geometry();
+                    
+                    tracing::info!(
+                        "Mapping window with first buffer - app_id: {:?}, title: {:?}, geometry: {:?}",
+                        app_id, title, geometry
+                    );
                     
                     // check if window should be fullscreen
                     let is_fullscreen = toplevel.with_pending_state(|state| {
@@ -252,10 +276,31 @@ impl XdgShellHandler for State {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface.clone());
         
+        // Log window properties to understand temporary windows
+        let parent = surface.parent();
+        
         // check if fullscreen was already requested (e.g., foot -F)
         let is_fullscreen = surface.with_pending_state(|state| {
             state.states.contains(xdg_toplevel::State::Fullscreen)
         });
+        
+        // Get app_id and title if already set
+        use smithay::wayland::compositor::with_states;
+        use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+        
+        let (app_id, title) = with_states(surface.wl_surface(), |states| {
+            if let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() {
+                let data = data.lock().unwrap();
+                (data.app_id.clone(), data.title.clone())
+            } else {
+                (None, None)
+            }
+        });
+        
+        tracing::info!(
+            "New toplevel window - has_parent: {}, fullscreen: {}, app_id: {:?}, title: {:?}",
+            parent.is_some(), is_fullscreen, app_id, title
+        );
         
         if is_fullscreen {
             tracing::debug!("Window requested fullscreen before mapping");
@@ -280,8 +325,28 @@ impl XdgShellHandler for State {
         self.pending_windows.push((surface, window));
     }
     
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {
-        // we'll handle popups later
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        tracing::info!(
+            "New popup surface - parent: {:?}, geometry: {:?}",
+            surface.get_parent_surface().is_some(),
+            positioner.get_geometry()
+        );
+        
+        // Configure the popup with the requested geometry
+        surface.with_pending_state(|state| {
+            state.geometry = positioner.get_geometry();
+            state.positioner = positioner;
+        });
+        
+        // Send the configure event to acknowledge the popup
+        if let Err(err) = surface.send_configure() {
+            tracing::warn!("Failed to configure popup: {:?}", err);
+        } else {
+            // Track the popup for proper rendering and input handling
+            if let Err(err) = self.popups.track_popup(PopupKind::from(surface)) {
+                tracing::warn!("Failed to track popup: {:?}", err);
+            }
+        }
     }
     
     fn move_request(&mut self, _surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {
@@ -293,6 +358,9 @@ impl XdgShellHandler for State {
     }
     
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        // Log destruction to understand window lifetime
+        tracing::info!("Toplevel destroyed");
+        
         // find and remove the window from our shell
         let (output, was_focused) = {
             let mut shell = self.shell.write().unwrap();
@@ -411,8 +479,54 @@ impl XdgShellHandler for State {
         }
     }
     
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
-        // we'll handle popup grabs later
+    fn grab(&mut self, surface: PopupSurface, seat: WlSeat, serial: Serial) {
+        let seat = Seat::from_resource(&seat).unwrap();
+        let kind = PopupKind::Xdg(surface);
+        
+        // Find the root surface for this popup
+        let maybe_root = find_popup_root_surface(&kind).ok();
+        if maybe_root.is_none() {
+            tracing::warn!("No root surface found for popup grab");
+            return;
+        }
+        
+        // For our compositor, we use WlSurface as the KeyboardFocus type
+        // So we pass the root surface directly
+        let root_surface = maybe_root.unwrap();
+        
+        // Create the popup grab
+        let ret = self.popups.grab_popup(root_surface.clone(), kind, &seat, serial);
+        
+        match ret {
+                Ok(mut grab) => {
+                    // Set keyboard grab
+                    if let Some(keyboard) = seat.get_keyboard() {
+                        if keyboard.is_grabbed()
+                            && !(keyboard.has_grab(serial)
+                                || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
+                        {
+                            grab.ungrab(PopupUngrabStrategy::All);
+                            return;
+                        }
+                        keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+                    }
+                    
+                    // Set pointer grab
+                    if let Some(pointer) = seat.get_pointer() {
+                        if pointer.is_grabbed()
+                            && !(pointer.has_grab(serial)
+                                || pointer.has_grab(grab.previous_serial().unwrap_or(serial)))
+                        {
+                            grab.ungrab(PopupUngrabStrategy::All);
+                            return;
+                        }
+                        pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("Failed to grab popup: {:?}", err);
+                }
+            }
     }
     
     fn reposition_request(&mut self, _surface: PopupSurface, _positioner: PositionerState, _token: u32) {

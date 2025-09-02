@@ -37,8 +37,16 @@ const UNFOCUSED_BORDER_COLOR: [f32; 4] = [0.0, 0.2, 0.5, 1.0]; // darker blue
 fn should_float_impl(window: &Window) -> bool {
     // Check if window is a dialog
     if let Some(toplevel) = window.toplevel() {
-        if let Some(_parent) = toplevel.parent() {
+        let has_parent = toplevel.parent().is_some();
+        
+        tracing::debug!(
+            "should_float check - has_parent: {}, geometry: {:?}",
+            has_parent, window.geometry()
+        );
+        
+        if has_parent {
             // Window has a parent, likely a dialog
+            tracing::debug!("Window has parent, floating it");
             return true;
         }
     }
@@ -96,6 +104,14 @@ impl Shell {
     
     /// Add a new window to the shell
     pub fn add_window(&mut self, window: Window, output: &Output) {
+        // Log window properties for debugging temporary windows
+        let geometry = window.geometry();
+        tracing::info!(
+            "Adding window - geometry: {:?}",
+            geometry
+        );
+        
+        
         // Get or create active workspace on this output
         let workspace_name = self.active_workspaces.get(output).cloned()
             .unwrap_or_else(|| {
@@ -110,6 +126,7 @@ impl Shell {
         if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
             // Determine if window should be floating
             let floating = should_float_impl(&window);
+            tracing::debug!("Window floating decision: {}", floating);
             
             workspace.add_window(window.clone(), floating);
             
@@ -505,6 +522,32 @@ impl Shell {
                             surface_elements.into_iter()
                                 .map(|elem| CosmicElement::Surface(elem))
                         );
+                        
+                        // Render popups for the fullscreen window
+                        if let Some(toplevel) = fullscreen_window.toplevel() {
+                            use smithay::desktop::PopupManager;
+                            use smithay::backend::renderer::element::surface::render_elements_from_surface_tree;
+                            
+                            let surface = toplevel.wl_surface();
+                            for (popup, popup_offset) in PopupManager::popups_for_surface(surface) {
+                                let offset = fullscreen_window.geometry().loc + popup_offset - popup.geometry().loc;
+                                let physical_location = (location + offset).to_physical_precise_round(output_scale);
+                                
+                                let popup_elements = render_elements_from_surface_tree(
+                                    renderer,
+                                    popup.wl_surface(),
+                                    physical_location,
+                                    output_scale,
+                                    1.0, // alpha
+                                    smithay::backend::renderer::element::Kind::Unspecified,
+                                );
+                                
+                                elements.extend(
+                                    popup_elements.into_iter()
+                                        .map(|elem| CosmicElement::Surface(elem))
+                                );
+                            }
+                        }
                     }
                 }
             } else {
@@ -528,6 +571,32 @@ impl Shell {
                             surface_elements.into_iter()
                                 .map(|elem| CosmicElement::Surface(elem))
                         );
+                        
+                        // Render popups for this window
+                        if let Some(toplevel) = window.toplevel() {
+                            use smithay::desktop::PopupManager;
+                            use smithay::backend::renderer::element::surface::render_elements_from_surface_tree;
+                            
+                            let surface = toplevel.wl_surface();
+                            for (popup, popup_offset) in PopupManager::popups_for_surface(surface) {
+                                let offset = window.geometry().loc + popup_offset - popup.geometry().loc;
+                                let physical_location = (location + offset).to_physical_precise_round(output_scale);
+                                
+                                let popup_elements = render_elements_from_surface_tree(
+                                    renderer,
+                                    popup.wl_surface(),
+                                    physical_location,
+                                    output_scale,
+                                    1.0, // alpha
+                                    smithay::backend::renderer::element::Kind::Unspecified,
+                                );
+                                
+                                window_elements.extend(
+                                    popup_elements.into_iter()
+                                        .map(|elem| CosmicElement::Surface(elem))
+                                );
+                            }
+                        }
                         
                         // Track focused window rectangle for border rendering
                         if self.focused_window.as_ref() == Some(window) && !workspace.floating_windows.contains(window) {
