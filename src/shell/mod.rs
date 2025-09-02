@@ -463,43 +463,63 @@ impl Shell {
         // 2. Windows (in the middle) - only from active workspace
         if let Some(workspace) = self.active_workspace(output) {
             
-            // First, collect all windows to render
-            let mut window_elements = Vec::new();
-            let mut focused_window_rect = None;
-            
-            for window in &workspace.windows {
-                if let Some(location) = self.space.element_location(window) {
-                    // get surface render elements and wrap them in CosmicElement
-                    let surface_elements = window.render_elements(
-                        renderer,
-                        location.to_physical_precise_round(output_scale),
-                        output_scale,
-                        1.0, // alpha
-                    );
-                    
-                    // wrap each surface element in CosmicElement::Surface
-                    window_elements.extend(
-                        surface_elements.into_iter()
-                            .map(|elem| CosmicElement::Surface(elem))
-                    );
-                    
-                    // Track focused window rectangle for border rendering
-                    if self.focused_window.as_ref() == Some(window) && !workspace.floating_windows.contains(window) {
-                        if let Some(rect) = workspace.window_rectangles.get(window) {
-                            if rect.size.w > 0 && rect.size.h > 0 {
-                                // Use the intended rectangle location, not the actual window location
-                                focused_window_rect = Some((rect.loc, rect.size));
+            // When there's a focused fullscreen window, only render that window
+            if has_focused_fullscreen {
+                if let Some(fullscreen_window) = &workspace.fullscreen {
+                    if let Some(location) = self.space.element_location(fullscreen_window) {
+                        // Render only the fullscreen window
+                        let surface_elements = fullscreen_window.render_elements(
+                            renderer,
+                            location.to_physical_precise_round(output_scale),
+                            output_scale,
+                            1.0, // alpha
+                        );
+                        
+                        elements.extend(
+                            surface_elements.into_iter()
+                                .map(|elem| CosmicElement::Surface(elem))
+                        );
+                    }
+                }
+            } else {
+                // Normal rendering for all windows when not in focused fullscreen
+                // First, collect all windows to render
+                let mut window_elements = Vec::new();
+                let mut focused_window_rect = None;
+                
+                for window in &workspace.windows {
+                    if let Some(location) = self.space.element_location(window) {
+                        // get surface render elements and wrap them in CosmicElement
+                        let surface_elements = window.render_elements(
+                            renderer,
+                            location.to_physical_precise_round(output_scale),
+                            output_scale,
+                            1.0, // alpha
+                        );
+                        
+                        // wrap each surface element in CosmicElement::Surface
+                        window_elements.extend(
+                            surface_elements.into_iter()
+                                .map(|elem| CosmicElement::Surface(elem))
+                        );
+                        
+                        // Track focused window rectangle for border rendering
+                        if self.focused_window.as_ref() == Some(window) && !workspace.floating_windows.contains(window) {
+                            if let Some(rect) = workspace.window_rectangles.get(window) {
+                                if rect.size.w > 0 && rect.size.h > 0 {
+                                    // Use the intended rectangle location, not the actual window location
+                                    focused_window_rect = Some((rect.loc, rect.size));
+                                }
                             }
                         }
                     }
                 }
-            }
-            
-            // Add window elements first (they will render behind borders in front-to-back order)
-            elements.extend(window_elements);
-            
-            // Render tab bar if in tabbed mode
-            if matches!(workspace.layout_mode, workspace::LayoutMode::Tabbed) {
+                
+                // Add window elements first (they will render behind borders in front-to-back order)
+                elements.extend(window_elements);
+                
+                // Render tab bar if in tabbed mode
+                if matches!(workspace.layout_mode, workspace::LayoutMode::Tabbed) {
                 let tiled: Vec<_> = workspace.tiled_windows().cloned().collect();
                 if !tiled.is_empty() {
                     let area = workspace.available_area;
@@ -592,7 +612,8 @@ impl Shell {
                     );
                     elements.push(CosmicElement::SolidColor(background_element));
                 }
-            }
+                }
+            } // End of !has_focused_fullscreen block
         }
         
         // 3. Background and Bottom layers (bottommost, behind windows)
@@ -1190,6 +1211,7 @@ impl Shell {
                 }
             }
             
+            workspace.needs_arrange = false;  // Clear the flag even for fullscreen
             return; // Don't arrange other windows when one is fullscreen
         }
         

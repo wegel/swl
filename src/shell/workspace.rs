@@ -176,8 +176,12 @@ impl Workspace {
     
     /// Update the output area for tiling
     pub fn update_output_geometry(&mut self, size: Rectangle<i32, Logical>) {
-        self.tiling.set_available_area(size);
-        self.needs_arrange = true;
+        // Only update if the area actually changed
+        if self.available_area != size {
+            self.available_area = size;
+            self.tiling.set_available_area(size);
+            self.needs_arrange = true;
+        }
     }
     
     /// Toggle between tiling and tabbed layout modes
