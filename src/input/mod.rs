@@ -100,7 +100,6 @@ impl State {
             
             InputEvent::PointerMotion { event, .. } => {
                 let delta = event.delta();
-                trace!("Pointer motion: {:?}", delta);
                 
                 {
                     let seat = &self.seat;
@@ -141,6 +140,9 @@ impl State {
                             time,
                         },
                     );
+                    
+                    // Send frame event after motion (cosmic-comp does this)
+                    pointer.frame(self);
                     
                     // update cursor position in shell (for rendering)
                     self.shell.write().unwrap().cursor_position = location;
@@ -200,6 +202,9 @@ impl State {
                         },
                     );
                     
+                    // Send frame event after motion (cosmic-comp does this)
+                    pointer.frame(self);
+                    
                     // update cursor position in shell (for rendering)
                     self.shell.write().unwrap().cursor_position = location;
                     
@@ -213,12 +218,12 @@ impl State {
             InputEvent::PointerButton { event, .. } => {
                 let button = event.button_code();
                 let state = event.state();
-                //debug!("Pointer button: {} {:?}", button, state);
+                trace!(?button, ?state, "Pointer button");
                 
                 // on button press, check if we need to focus a different window
                 if state == ButtonState::Pressed {
                     let pointer_loc = self.seat.get_pointer().unwrap().current_location();
-                    //debug!("Button pressed at location: {:?}", pointer_loc);
+                    trace!("Button pressed at location: {:?}", pointer_loc);
                     
                     // First check if this is a tab click
                     let mut tab_clicked = false;
@@ -290,12 +295,13 @@ impl State {
                             time,
                         },
                     );
+                    
+                    // Send frame event after button (cosmic-comp does this)
+                    pointer.frame(self);
                 }
             }
             
             InputEvent::PointerAxis { event, .. } => {
-                trace!("Pointer axis");
-                
                 {
                     let seat = &self.seat;
                     let pointer = seat.get_pointer().unwrap();
