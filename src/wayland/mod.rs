@@ -18,7 +18,7 @@ use smithay::{
     utils::{Clock, Monotonic, Size},
     wayland::{
         buffer::BufferHandler,
-        compositor::{CompositorClientState, CompositorHandler, CompositorState},
+        compositor::{CompositorClientState, CompositorHandler, CompositorState, get_parent},
         output::OutputHandler,
         selection::{
             data_device::{
@@ -160,7 +160,18 @@ impl CompositorHandler for State {
             // handle regular window surface commits  
             let output = {
                 let mut shell = self.shell.write().unwrap();
-                let output = shell.visible_output_for_surface(surface).cloned();
+                // First try to find output for this surface directly
+                let mut output = shell.visible_output_for_surface(surface).cloned();
+                
+                // If not found, this might be a subsurface - check parent surfaces
+                if output.is_none() {
+                    if let Some(parent) = get_parent(surface) {
+                        output = shell.visible_output_for_surface(&parent).cloned();
+                        if output.is_some() {
+                            tracing::trace!("Found output for subsurface via parent");
+                        }
+                    }
+                }
                 
                 let geometry_changed = if let Some(window) = shell.space.elements().find(|w| {
                     w.toplevel().unwrap().wl_surface() == surface
@@ -169,7 +180,6 @@ impl CompositorHandler for State {
                     let old_geom = window.geometry();
                     
                     window.on_commit();
-                    // tracing::debug!("Window surface commit handled");
                     
                     // Check if geometry changed (e.g. CSD shadows became available)
                     let new_geom = window.geometry();
@@ -179,7 +189,6 @@ impl CompositorHandler for State {
                     if let Some(ref output) = output {
                         let clock = Clock::<Monotonic>::new();
                         send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
-                        // tracing::debug!("Sent frame callback to window surface");
                     }
                     
                     changed
@@ -204,10 +213,7 @@ impl CompositorHandler for State {
             
             // schedule render on the output showing this surface
             if let Some(output) = output {
-                // tracing::debug!("Scheduling render for output {} after surface commit", output.name());
                 self.backend.schedule_render(&output);
-            } else {
-                // tracing::debug!("No output found for committed surface");
             }
         }
     }

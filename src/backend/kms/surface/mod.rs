@@ -807,7 +807,6 @@ impl SurfaceThreadState {
             return;
         };
         
-        // debug!("queue_redraw_force called for {} (force={})", self.output.name(), force);
         
         if let QueueState::WaitingForVBlank { .. } = &self.state {
             // we're waiting for VBlank, request a redraw afterwards.
@@ -991,6 +990,7 @@ impl SurfaceThreadState {
         // increment sequence to prevent empty-damage commit busy loops
         self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
         
+        
         // send frame callbacks to all windows on this output
         let shell = self.shell.read().unwrap();
         for window in shell.space.elements() {
@@ -1160,6 +1160,16 @@ impl SurfaceThreadState {
             
             // render directly to the DRM compositor's framebuffer
             // this gives us proper buffer age from the swapchain
+            // Debug: Check if we're rendering Firefox windows
+            let has_multiple_windows = elements.iter().filter(|e| matches!(e, CosmicElement::Surface(_))).count() > 2;
+            if has_multiple_windows {
+                static MULTI_WINDOW_RENDERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                let render_count = MULTI_WINDOW_RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if render_count % 60 == 0 {
+                    tracing::info!("Rendering frame #{} with {} elements", render_count, elements.len());
+                }
+            }
+            
             let frame_result = self.compositor.as_mut().unwrap().render_frame(
                 &mut renderer,
                 &elements,
