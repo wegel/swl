@@ -113,8 +113,20 @@ impl State {
                     if let Some(output) = self.outputs.first() {
                         if let Some(mode) = output.current_mode() {
                             let scale = output.current_scale().fractional_scale();
-                            let max_x = (mode.size.w as f64 / scale) - 1.0;
-                            let max_y = (mode.size.h as f64 / scale) - 1.0;
+                            let transform = output.current_transform();
+                            
+                            // Calculate logical size accounting for scale
+                            let mut max_x = (mode.size.w as f64 / scale) - 1.0;
+                            let mut max_y = (mode.size.h as f64 / scale) - 1.0;
+                            
+                            // Account for rotation - swap dimensions if rotated 90 or 270 degrees
+                            use smithay::utils::Transform;
+                            match transform {
+                                Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => {
+                                    std::mem::swap(&mut max_x, &mut max_y);
+                                }
+                                _ => {}
+                            }
                             
                             location.x = location.x.clamp(0.0, max_x);
                             location.y = location.y.clamp(0.0, max_y);
@@ -165,8 +177,21 @@ impl State {
                     let location = if let Some(output) = self.outputs.first() {
                         if let Some(mode) = output.current_mode() {
                             let scale = output.current_scale().fractional_scale();
-                            let width = mode.size.w as f64 / scale;
-                            let height = mode.size.h as f64 / scale;
+                            let transform = output.current_transform();
+                            
+                            // Calculate logical size accounting for scale
+                            let mut width = mode.size.w as f64 / scale;
+                            let mut height = mode.size.h as f64 / scale;
+                            
+                            // Account for rotation - swap dimensions if rotated 90 or 270 degrees
+                            use smithay::utils::Transform;
+                            match transform {
+                                Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => {
+                                    std::mem::swap(&mut width, &mut height);
+                                }
+                                _ => {}
+                            }
+                            
                             Point::from((
                                 (event.x() * width).clamp(0.0, width - 1.0),
                                 (event.y() * height).clamp(0.0, height - 1.0),

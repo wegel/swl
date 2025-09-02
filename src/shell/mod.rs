@@ -1184,10 +1184,33 @@ impl Shell {
                 None
             };
             
-            // Update workspace geometry based on output
-            let layer_map = smithay::desktop::layer_map_for_output(output);
-            let available_area = layer_map.non_exclusive_zone();
-            workspace.update_output_geometry(available_area);
+        // Update workspace geometry based on output
+        // Calculate the proper logical output size accounting for rotation and scale
+        let output_size = {
+            use smithay::utils::Transform;
+            let mode = output.current_mode().unwrap();
+            let transform = output.current_transform();
+            let scale = output.current_scale().fractional_scale();
+            
+            // Apply transform first (on physical size), then convert to logical
+            Transform::from(transform)
+                .transform_size(mode.size)
+                .to_f64()
+                .to_logical(scale)
+                .to_i32_round()
+        };
+        
+        // Get the available area from layer map
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        let mut available_area = layer_map.non_exclusive_zone();
+        
+        // If layer map returns the full output size, use our calculated size
+        // (LayerMap doesn't always handle rotation/scale correctly)
+        if available_area.size == output_size || available_area.size == Size::from((output_size.h, output_size.w)) {
+            available_area = Rectangle::new(available_area.loc, output_size);
+        }
+        
+        workspace.update_output_geometry(available_area);
             
             // Set new output
             workspace.output = Some(output.clone());
@@ -1257,12 +1280,43 @@ impl Shell {
             None => return,
         };
         
-        // Calculate and cache the available area
+        // Calculate the proper logical output size accounting for rotation and scale
+        let output_size = {
+            use smithay::utils::Transform;
+            let mode = output.current_mode().unwrap();
+            let transform = output.current_transform();
+            let scale = output.current_scale().fractional_scale();
+            
+            // Apply transform first (on physical size), then convert to logical
+            Transform::from(transform)
+                .transform_size(mode.size)
+                .to_f64()
+                .to_logical(scale)
+                .to_i32_round()
+        };
+        
+        // Get the available area from layer map
         let layer_map = smithay::desktop::layer_map_for_output(output);
-        let available_area = layer_map.non_exclusive_zone();
-        workspace.available_area = available_area;
+        let mut available_area = layer_map.non_exclusive_zone();
+        
+        // If layer map returns the full output size, use our calculated size
+        // (LayerMap doesn't always handle rotation/scale correctly)
+        if available_area.size == output_size || available_area.size == Size::from((output_size.h, output_size.w)) {
+            available_area = Rectangle::new(available_area.loc, output_size);
+        }
+        
+        // Debug logging for transform issues
+        tracing::debug!(
+            "Output {} - Mode: {:?}, Scale: {}, Transform: {:?}, Available area: {:?}",
+            output.name(),
+            output.current_mode().map(|m| (m.size.w, m.size.h)),
+            output.current_scale().fractional_scale(),
+            output.current_transform(),
+            available_area
+        );
         
         // Update the tiling layout with the available area
+        // This will also update workspace.available_area if it changed
         workspace.update_output_geometry(available_area);
         
         // Clean up dead windows first
@@ -1276,10 +1330,22 @@ impl Shell {
             let output_size = output.current_mode()
                 .map(|mode| {
                     let scale = output.current_scale().fractional_scale();
-                    Size::from((
+                    let transform = output.current_transform();
+                    
+                    // Convert physical to logical size
+                    let logical_size = Size::from((
                         (mode.size.w as f64 / scale) as i32,
                         (mode.size.h as f64 / scale) as i32,
-                    ))
+                    ));
+                    
+                    // Account for rotation - swap dimensions if rotated 90 or 270 degrees
+                    use smithay::utils::Transform;
+                    match transform {
+                        Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => {
+                            Size::from((logical_size.h, logical_size.w))
+                        }
+                        _ => logical_size,
+                    }
                 })
                 .unwrap_or_else(|| (1920, 1080).into());
             

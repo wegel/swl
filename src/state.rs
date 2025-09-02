@@ -202,11 +202,37 @@ impl OutputConfigurationHandler for State {
         // update output configuration state
         self.output_configuration_state.update();
         
-        // trigger re-arrangement of windows
+        // trigger re-arrangement of windows and update geometry
         let mut shell = self.shell.write().unwrap();
         for output in &self.outputs {
+            // Calculate the proper logical output size accounting for rotation and scale
+            let output_size = {
+                use smithay::utils::Transform;
+                let mode = output.current_mode().unwrap();
+                let transform = output.current_transform();
+                let scale = output.current_scale().fractional_scale();
+                
+                // Apply transform first (on physical size), then convert to logical
+                Transform::from(transform)
+                    .transform_size(mode.size)
+                    .to_f64()
+                    .to_logical(scale)
+                    .to_i32_round()
+            };
+            
+            // Get the available area from layer map
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            let mut available_area = layer_map.non_exclusive_zone();
+            
+            // If layer map returns the full output size, use our calculated size
+            // (LayerMap doesn't always handle rotation/scale correctly)
+            if available_area.size == output_size || available_area.size == smithay::utils::Size::from((output_size.h, output_size.w)) {
+                available_area = smithay::utils::Rectangle::new(available_area.loc, output_size);
+            }
+            
             if let Some(workspace) = shell.active_workspace_mut(output) {
-                workspace.needs_arrange = true;
+                // Update workspace geometry (this will mark needs_arrange if area changed)
+                workspace.update_output_geometry(available_area);
             }
         }
         drop(shell);

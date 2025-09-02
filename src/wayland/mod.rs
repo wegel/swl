@@ -313,9 +313,25 @@ impl XdgShellHandler for State {
             });
         } else {
             // normal window - send initial configure with size and activated state
+            // Use scale-aware initial size based on the first output
+            let initial_size = if let Some(output) = self.outputs.first() {
+                let scale = output.current_scale().fractional_scale();
+                // Use a reasonable default that accounts for scale
+                // This ensures the window fits on high-DPI displays
+                let base_size = Size::from((800, 600));
+                // For high DPI, we might want smaller logical sizes
+                if scale > 1.5 {
+                    Size::from((640, 480))
+                } else {
+                    base_size
+                }
+            } else {
+                Size::from((800, 600))
+            };
+            
             surface.with_pending_state(|state| {
                 state.states.set(xdg_toplevel::State::Activated);
-                state.size = Some((800, 600).into());
+                state.size = Some(initial_size);
             });
         }
         
@@ -426,8 +442,19 @@ impl XdgShellHandler for State {
                 let mode = output.current_mode().unwrap();
                 // convert physical size to logical
                 let scale = output.current_scale().fractional_scale();
-                let logical_size = mode.size.to_f64().to_logical(scale).to_i32_round();
-                debug!("Fullscreen size will be: {:?}", logical_size);
+                let mut logical_size = mode.size.to_f64().to_logical(scale).to_i32_round();
+                
+                // account for rotation - swap dimensions if rotated 90 or 270 degrees
+                let transform = output.current_transform();
+                use smithay::utils::Transform;
+                match transform {
+                    Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => {
+                        logical_size = Size::from((logical_size.h, logical_size.w));
+                    }
+                    _ => {}
+                }
+                
+                debug!("Fullscreen size will be: {:?} (transform: {:?})", logical_size, transform);
                 state.size = Some(logical_size);
             });
             surface.send_configure();
@@ -463,8 +490,17 @@ impl XdgShellHandler for State {
         }).cloned();
         
         if let Some(window) = window {
-            // use default restore size
-            let restore_size = Size::from((800, 600));
+            // use scale-aware restore size
+            let restore_size = if let Some(output) = self.outputs.first() {
+                let scale = output.current_scale().fractional_scale();
+                if scale > 1.5 {
+                    Size::from((640, 480))
+                } else {
+                    Size::from((800, 600))
+                }
+            } else {
+                Size::from((800, 600))
+            };
             
             surface.with_pending_state(|state| {
                 state.states.unset(xdg_toplevel::State::Fullscreen);
