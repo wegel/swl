@@ -203,6 +203,15 @@ fn init_libinput(
                     if let Err(e) = device.config_tap_set_drag_lock_enabled(true) {
                         warn!("Failed to enable tap-drag-lock: {:?}", e);
                     }
+                    
+                    // Disable touchpad while typing
+                    if device.config_dwt_is_available() {
+                        if let Err(e) = device.config_dwt_set_enabled(false) {
+                            warn!("Failed to disable 'disable-while-typing': {:?}", e);
+                        } else {
+                            info!("Disabled 'disable-while-typing' for touchpad");
+                        }
+                    }
                 }
                 
                 // track input devices
