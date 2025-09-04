@@ -35,7 +35,7 @@ pub struct OutputConfigurationState {
     outputs: Vec<Output>,
     instances: Vec<OutputMngrInstance>,
     serial_counter: u32,
-    global: GlobalId,
+    _global: GlobalId, // kept alive to maintain global
     dh: DisplayHandle,
 }
 
@@ -88,6 +88,7 @@ pub enum OutputConfiguration {
         position: Option<Point<i32, Logical>>,
         transform: Option<Transform>,
         scale: Option<f64>,
+        #[allow(dead_code)] // stored but not yet implemented in compositor
         adaptive_sync: Option<bool>,
     },
     Disabled,
@@ -126,7 +127,7 @@ impl OutputConfigurationState {
             outputs: Vec::new(),
             instances: Vec::new(),
             serial_counter: 0,
-            global,
+            _global: global,
             dh: dh.clone(),
         }
     }
@@ -141,6 +142,7 @@ impl OutputConfigurationState {
         }
     }
 
+    #[allow(dead_code)] // TODO: should be called when outputs are removed
     pub fn remove_heads<'a>(&mut self, outputs: impl Iterator<Item = &'a Output>) {
         let to_remove: Vec<_> = outputs.cloned().collect();
         

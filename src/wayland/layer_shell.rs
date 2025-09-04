@@ -30,6 +30,10 @@ impl WlrLayerShellHandler for State {
     ) {
         info!("New layer surface requested: {} on layer {:?}", namespace, layer);
         
+        // Debug: log the surface's desired size
+        debug!("Layer surface {} created for output {:?}", namespace, 
+            wl_output.as_ref().and_then(Output::from_resource).map(|o| o.name()));
+        
         // get the output for this layer surface
         let output = wl_output
             .as_ref()
@@ -37,8 +41,10 @@ impl WlrLayerShellHandler for State {
             .or_else(|| self.outputs.first().cloned());
             
         if let Some(output) = output {
+            debug!("Output {} geometry for layer surface: {:?}", output.name(), output.current_mode());
+            
             // create the layer surface
-            let layer_surface = LayerSurface::new(surface, namespace);
+            let layer_surface = LayerSurface::new(surface, namespace.clone());
             
             // map it to the output
             let mut layer_map = layer_map_for_output(&output);
@@ -51,6 +57,8 @@ impl WlrLayerShellHandler for State {
             layer_surface.layer_surface().send_configure();
             
             debug!("Layer surface mapped to output {}", output.name());
+            
+            debug!("Layer surface {} mapped to output {} and configure sent", namespace, output.name());
             
             // if layer arrangement changed (e.g. new exclusive zone), re-arrange windows
             if changed {
@@ -94,9 +102,9 @@ impl WlrLayerShellHandler for State {
             // Always mark windows for re-arrangement when a layer surface is destroyed
             // as it may have had exclusive zones that affected window layout
             let mut shell = self.shell.write().unwrap();
-            if let Some(workspace) = shell.active_workspace_mut(&output) {
+            shell.apply_to_all_workspaces_on_output(&output, |workspace| {
                 workspace.needs_arrange = true;
-            }
+            });
             
             // schedule render for the output
             self.backend.schedule_render(&output);

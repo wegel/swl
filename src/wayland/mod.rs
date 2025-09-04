@@ -79,20 +79,34 @@ impl CompositorHandler for State {
                 drop(layer_map);
                 
                 // re-arrange layers as the surface may have changed size
+                tracing::trace!("Layer surface committing on output {}, re-arranging", output.name());
                 let changed = {
                     let mut layer_map = smithay::desktop::layer_map_for_output(output);
                     layer_map.arrange()
                 }; // layer_map dropped here, mutex released
                 
+                // Debug: check geometry after commit arrange
+                if let Some(layer_surface) = {
+                    let layer_map = smithay::desktop::layer_map_for_output(output);
+                    layer_map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL).cloned()
+                } {
+                    let layer_map = smithay::desktop::layer_map_for_output(output);
+                    let geometry = layer_map.layer_geometry(&layer_surface);
+                    tracing::debug!("Layer surface geometry after commit arrange: {:?}", geometry);
+                }
+                
                 if changed {
-                    //tracing::debug!("Layer arrangement changed after commit");
+                    tracing::trace!("Layer arrangement changed after commit on output {}", output.name());
                     // mark that windows need to be re-arranged
                     let mut shell = self.shell.write().unwrap();
-                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                    shell.apply_to_all_workspaces_on_output(output, |workspace| {
                         workspace.needs_arrange = true;
-                    }
+                        tracing::debug!("Marked workspace {} for re-arrangement", workspace.name);
+                    });
                     drop(shell);
                     self.backend.schedule_render(output);
+                } else {
+                    tracing::trace!("Layer surface committed but no arrangement change needed");
                 }
                 
                 if wants_focus {
@@ -150,8 +164,21 @@ impl CompositorHandler for State {
                         state.states.contains(xdg_toplevel::State::Fullscreen)
                     });
                     
+                    // Get cursor position to determine correct virtual output
+                    let cursor_pos = self.seat.get_pointer().unwrap().current_location();
+                    
                     let mut shell = self.shell.write().unwrap();
-                    shell.add_window(window.clone(), &output);
+                    
+                    // Find virtual output containing cursor position
+                    if let Some(virtual_output_id) = shell.virtual_output_at_point(cursor_pos) {
+                        tracing::debug!("Adding window to virtual output {:?} at cursor position {:?}", 
+                            virtual_output_id, cursor_pos);
+                        shell.add_window_to_virtual_output(window.clone(), virtual_output_id);
+                    } else {
+                        // Fallback to legacy method if cursor not over any virtual output
+                        tracing::debug!("Cursor not over any virtual output, using fallback");
+                        shell.add_window(window.clone(), &output);
+                    }
                     
                     if is_fullscreen {
                         tracing::debug!("Window is fullscreen, updating shell state");
@@ -224,9 +251,9 @@ impl CompositorHandler for State {
                 // Mark for re-arrange if geometry changed
                 if geometry_changed {
                     if let Some(ref output) = output {
-                        if let Some(workspace) = shell.active_workspace_mut(output) {
+                        shell.apply_to_all_workspaces_on_output(output, |workspace| {
                             workspace.needs_arrange = true;
-                        }
+                        });
                     }
                 }
                 
@@ -379,11 +406,11 @@ impl XdgShellHandler for State {
         tracing::info!("Toplevel destroyed");
         
         // find and remove the window from our shell
-        let (output, was_focused) = {
+        let (outputs, was_focused) = {
             let mut shell = self.shell.write().unwrap();
             
             let mut was_focused = false;
-            let mut found_output = None;
+            let mut found_outputs = Vec::new();
             
             // Find the window in any workspace
             let window_to_remove = shell.space.elements()
@@ -394,11 +421,11 @@ impl XdgShellHandler for State {
                 // check if focused window was destroyed
                 was_focused = shell.focused_window.as_ref() == Some(&window);
                 
-                // Remove from all workspaces and get the output it was on
-                found_output = shell.remove_window(&window);
+                // Remove from all workspaces and get the outputs it was on
+                found_outputs = shell.remove_window(&window);
             }
             
-            (found_output, was_focused)
+            (found_outputs, was_focused)
         };
         
         // if the destroyed window was focused, clear keyboard focus and mark for refresh
@@ -410,8 +437,8 @@ impl XdgShellHandler for State {
             self.needs_focus_refresh = true;
         }
         
-        // schedule render for the output
-        if let Some(output) = output {
+        // schedule render for all affected outputs
+        for output in outputs {
             self.backend.schedule_render(&output);
         }
     }

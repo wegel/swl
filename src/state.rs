@@ -202,6 +202,19 @@ impl OutputConfigurationHandler for State {
         // update output configuration state
         self.output_configuration_state.update();
         
+        // update virtual outputs after configuration changes
+        tracing::debug!("Updating virtual outputs after configuration changes, {} physical outputs available", self.outputs.len());
+        for output in &self.outputs {
+            tracing::debug!("Physical output {} - scale: {}, transform: {:?}", 
+                output.name(), output.current_scale().fractional_scale(), output.current_transform());
+        }
+        {
+            let mut shell = self.shell.write().unwrap();
+            tracing::debug!("Calling virtual_output_manager.update_all with {} outputs", self.outputs.len());
+            shell.virtual_output_manager.update_all(&self.outputs);
+            tracing::debug!("Virtual output update_all completed");
+        }
+        
         // trigger re-arrangement of windows and update geometry
         let mut shell = self.shell.write().unwrap();
         for output in &self.outputs {
@@ -230,10 +243,10 @@ impl OutputConfigurationHandler for State {
                 available_area = smithay::utils::Rectangle::new(available_area.loc, output_size);
             }
             
-            if let Some(workspace) = shell.active_workspace_mut(output) {
+            shell.apply_to_all_workspaces_on_output(output, |workspace| {
                 // Update workspace geometry (this will mark needs_arrange if area changed)
                 workspace.update_output_geometry(available_area);
-            }
+            });
         }
         drop(shell);
         
@@ -533,6 +546,25 @@ impl State {
                         // add outputs to our state
                         self.outputs.extend(outputs.clone());
                         
+                        // load virtual output configuration from environment and update
+                        {
+                            let mut shell = self.shell.write().unwrap();
+                            shell.virtual_output_manager.load_config(&self.outputs);
+                            shell.virtual_output_manager.update_all(&self.outputs);
+                            
+                            // ensure all virtual outputs have initial active workspaces
+                            let vout_ids: Vec<_> = shell.virtual_output_manager.all().map(|vo| vo.id).collect();
+                            for (i, vout_id) in vout_ids.iter().enumerate() {
+                                if let Some(vout) = shell.virtual_output_manager.get(*vout_id) {
+                                    if vout.active_workspace().is_none() {
+                                        // assign different workspaces to different virtual outputs
+                                        let workspace_name = (i + 1).to_string();
+                                        shell.switch_workspace_on_virtual(*vout_id, &workspace_name);
+                                    }
+                                }
+                            }
+                        }
+                        
                         // register outputs with output configuration protocol
                         self.output_configuration_state.add_heads(outputs.iter());
                         self.output_configuration_state.update();
@@ -584,6 +616,9 @@ impl State {
                 if let Some(token) = device.event_token.take() {
                     self.loop_handle.remove(token);
                 }
+                
+                // update virtual outputs after device removal
+                self.shell.write().unwrap().virtual_output_manager.update_all(&self.outputs);
                 
                 // if this was the primary GPU, try to find another
                 if kms.primary_gpu.as_ref() == Some(&drm_node) {

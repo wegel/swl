@@ -1056,13 +1056,13 @@ impl SurfaceThreadState {
         // check if windows need to be re-arranged before rendering
         {
             let shell = self.shell.write().unwrap();
-            // Check if active workspace needs arrangement
-            if let Some(workspace) = shell.active_workspace(&self.output) {
-                if workspace.needs_arrange {
-                    drop(shell);
-                    let mut shell = self.shell.write().unwrap();
-                    shell.arrange_windows_on_output(&self.output);
-                }
+            // Check if any workspace on this output needs arrangement
+            let needs_arrangement = shell.any_workspace_needs_arrange_on_output(&self.output);
+            
+            if needs_arrangement {
+                drop(shell);
+                let mut shell = self.shell.write().unwrap();
+                shell.arrange_windows_on_output(&self.output);
             }
         }
         

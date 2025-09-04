@@ -2,12 +2,22 @@
 
 use smithay::{
     desktop::Window,
-    output::Output,
     utils::{IsAlive, Logical, Rectangle, Size},
 };
 use std::collections::{HashMap, HashSet};
 
 use super::tiling::TilingLayout;
+use super::virtual_output::VirtualOutputId;
+
+/// Unique identifier for a workspace
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WorkspaceId(pub u64);
+
+impl std::fmt::Display for WorkspaceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WorkspaceId({})", self.0)
+    }
+}
 
 /// Tab bar height in pixels
 pub const TAB_HEIGHT: i32 = 6;
@@ -28,8 +38,6 @@ pub struct Workspace {
     #[allow(dead_code)] // Will be used for workspace switching/display
     pub name: String,
     
-    /// Currently displayed on this output (None = hidden)
-    pub output: Option<Output>,
     
     /// Windows in this workspace
     pub windows: Vec<Window>,
@@ -60,6 +68,9 @@ pub struct Workspace {
     
     /// Active tab index (for tabbed mode)
     pub active_tab_index: usize,
+    
+    /// Associated virtual output (if any)
+    pub virtual_output_id: Option<VirtualOutputId>,
 }
 
 impl Workspace {
@@ -67,7 +78,6 @@ impl Workspace {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            output: None,
             windows: Vec::new(),
             fullscreen: None,
             focus_stack: Vec::new(),
@@ -78,6 +88,7 @@ impl Workspace {
             available_area: Rectangle::from_size(Size::from((1920, 1080))), // default size
             layout_mode: LayoutMode::Tiling,
             active_tab_index: 0,
+            virtual_output_id: None,
         }
     }
     

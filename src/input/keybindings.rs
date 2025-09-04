@@ -38,6 +38,7 @@ pub enum Action {
     
     // system
     Quit,
+    VtSwitch(i32),
 }
 
 /// A keybinding definition
@@ -214,6 +215,19 @@ impl Keybindings {
             xkb::KEY_0,
             Action::MoveToWorkspace("10".to_string()),
         ));
+        
+        // VT switching - Ctrl+Alt+F1-F12 
+        for vt in 1..=12 {
+            bindings.push(Keybinding::new(
+                ModifiersState {
+                    ctrl: true,
+                    alt: true,
+                    ..Default::default()
+                },
+                xkb::KEY_F1 + (vt - 1),
+                Action::VtSwitch(vt as i32),
+            ));
+        }
         
         debug!("Initialized {} keybindings", bindings.len());
         

@@ -3,6 +3,7 @@
 pub mod keybindings;
 
 use smithay::{
+    backend::session::Session,
     backend::input::{
         AbsolutePositionEvent, ButtonState, Device, DeviceCapability, InputBackend, InputEvent, 
         KeyboardKeyEvent, PointerButtonEvent, PointerMotionEvent, PointerAxisEvent, 
@@ -29,7 +30,7 @@ use smithay::{
     utils::{Point, SERIAL_COUNTER},
     wayland::selection::{data_device::set_data_device_focus, primary_selection::set_primary_focus},
 };
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace, warn};
 use std::process::Command;
 
 use crate::State;
@@ -258,9 +259,15 @@ impl State {
                         if shell.handle_tab_click(output, pointer_loc) {
                             tab_clicked = true;
                             // Update keyboard focus to the active tab
-                            if let Some(workspace) = shell.active_workspace(output) {
-                                if let Some(window) = workspace.tiled_windows().nth(workspace.active_tab_index).cloned() {
-                                    tab_surface = window.toplevel().map(|t| t.wl_surface().clone());
+                            if let Some(virtual_output_id) = shell.virtual_output_at_position(output, pointer_loc) {
+                                if let Some(virtual_output) = shell.virtual_output_manager.get(virtual_output_id) {
+                                    if let Some(workspace_name) = &virtual_output.active_workspace {
+                                        if let Some(workspace) = shell.workspaces.get(workspace_name) {
+                                            if let Some(window) = workspace.tiled_windows().nth(workspace.active_tab_index).cloned() {
+                                                tab_surface = window.toplevel().map(|t| t.wl_surface().clone());
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -537,72 +544,89 @@ impl State {
             
             // layout control
             IncreaseMasterWidth => {
-                let mut shell = self.shell.write().unwrap();
-                // Apply to active workspace on first output
-                if let Some(output) = self.outputs.first() {
-                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                let outputs = {
+                    let mut shell = self.shell.write().unwrap();
+                    // Apply to focused workspace
+                    if let Some(workspace) = shell.focused_workspace_mut() {
                         workspace.tiling.set_master_factor(0.05);
                         workspace.needs_arrange = true;
                     }
-                    drop(shell);
-                    self.backend.schedule_render(output);
+                    shell.focused_physical_outputs()
+                };
+                // Schedule render on affected outputs
+                for output in outputs {
+                    self.backend.schedule_render(&output);
                 }
             }
             DecreaseMasterWidth => {
-                let mut shell = self.shell.write().unwrap();
-                // Apply to active workspace on first output
-                if let Some(output) = self.outputs.first() {
-                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                let outputs = {
+                    let mut shell = self.shell.write().unwrap();
+                    // Apply to focused workspace
+                    if let Some(workspace) = shell.focused_workspace_mut() {
                         workspace.tiling.set_master_factor(-0.05);
                         workspace.needs_arrange = true;
                     }
-                    drop(shell);
-                    self.backend.schedule_render(output);
+                    shell.focused_physical_outputs()
+                };
+                // Schedule render on affected outputs
+                for output in outputs {
+                    self.backend.schedule_render(&output);
                 }
             }
             IncreaseMasterCount => {
-                let mut shell = self.shell.write().unwrap();
-                // Apply to active workspace on first output
-                if let Some(output) = self.outputs.first() {
-                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                let outputs = {
+                    let mut shell = self.shell.write().unwrap();
+                    // Apply to focused workspace
+                    if let Some(workspace) = shell.focused_workspace_mut() {
                         workspace.tiling.inc_n_master(1);
                         workspace.needs_arrange = true;
                     }
-                    drop(shell);
-                    self.backend.schedule_render(output);
+                    shell.focused_physical_outputs()
+                };
+                // Schedule render on affected outputs
+                for output in outputs {
+                    self.backend.schedule_render(&output);
                 }
             }
             DecreaseMasterCount => {
-                let mut shell = self.shell.write().unwrap();
-                // Apply to active workspace on first output
-                if let Some(output) = self.outputs.first() {
-                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                let outputs = {
+                    let mut shell = self.shell.write().unwrap();
+                    // Apply to focused workspace
+                    if let Some(workspace) = shell.focused_workspace_mut() {
                         workspace.tiling.inc_n_master(-1);
                         workspace.needs_arrange = true;
                     }
-                    drop(shell);
-                    self.backend.schedule_render(output);
+                    shell.focused_physical_outputs()
+                };
+                // Schedule render on affected outputs
+                for output in outputs {
+                    self.backend.schedule_render(&output);
                 }
             }
             
             // tabbed mode
             ToggleLayoutMode => {
-                if let Some(output) = self.outputs.first() {
+                let outputs = {
                     let mut shell = self.shell.write().unwrap();
-                    if let Some(workspace) = shell.active_workspace_mut(output) {
+                    // Apply to focused workspace
+                    if let Some(workspace) = shell.focused_workspace_mut() {
                         workspace.toggle_layout_mode();
                     }
-                    drop(shell);
-                    self.backend.schedule_render(output);
+                    shell.focused_physical_outputs()
+                };
+                // Schedule render on affected outputs
+                for output in outputs {
+                    self.backend.schedule_render(&output);
                 }
             }
             NextTab => {
                 if let Some(output) = self.outputs.first().cloned() {
                     let surface = {
                         let mut shell = self.shell.write().unwrap();
-                        if let Some(workspace) = shell.active_workspace_mut(&output) {
+                        if let Some(workspace) = shell.focused_workspace_mut() {
                             if let Some(window) = workspace.next_tab() {
                                 shell.focused_window = Some(window.clone());
+                                shell.update_focused_virtual_output();
                                 window.toplevel().map(|t| t.wl_surface().clone())
                             } else {
                                 None
@@ -626,9 +650,10 @@ impl State {
                 if let Some(output) = self.outputs.first().cloned() {
                     let surface = {
                         let mut shell = self.shell.write().unwrap();
-                        if let Some(workspace) = shell.active_workspace_mut(&output) {
+                        if let Some(workspace) = shell.focused_workspace_mut() {
                             if let Some(window) = workspace.prev_tab() {
                                 shell.focused_window = Some(window.clone());
+                                shell.update_focused_virtual_output();
                                 window.toplevel().map(|t| t.wl_surface().clone())
                             } else {
                                 None
@@ -711,31 +736,127 @@ impl State {
             
             // workspace management
             SwitchToWorkspace(name) => {
-                if let Some(output) = self.outputs.first().cloned() {
-                    // Switch workspace and get the focused window
-                    let focused_window = {
-                        let mut shell = self.shell.write().unwrap();
-                        shell.switch_to_workspace(&output, name);
-                        shell.focused_window.clone()
-                    }; // shell lock dropped here
+                // find workspace by name and check if it exists
+                let (_workspace_id, target_vout_id, focused_window) = {
+                    let mut shell = self.shell.write().unwrap();
                     
-                    // Now update keyboard focus
-                    if let Some(window) = focused_window {
-                        if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone()) {
-                            let keyboard = self.seat.get_keyboard().unwrap();
-                            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                            keyboard.set_focus(self, Some(surface), serial);
-                            //tracing::debug!("Updated keyboard focus after workspace switch");
+                    // get workspace ID for this name (or create if doesn't exist)
+                    let workspace_id = shell.find_or_create_workspace_id(&name);
+                    
+                    // check if workspace has an associated virtual output
+                    let workspace = shell.workspaces.get(&workspace_id).unwrap();
+                    let target_vout_id = workspace.virtual_output_id;
+                    
+                    // if workspace doesn't have an owner, assign it to cursor's virtual output
+                    let target_vout_id = if let Some(vout_id) = target_vout_id {
+                        vout_id
+                    } else {
+                        // find virtual output containing the cursor for new workspace
+                        let cursor_pos = self.seat.get_pointer().unwrap().current_location();
+                        let cursor_vout_id = shell.virtual_output_manager.all()
+                            .find(|vout| vout.logical_geometry.to_f64().contains(cursor_pos))
+                            .map(|vout| vout.id);
+                        
+                        if let Some(cursor_vout_id) = cursor_vout_id {
+                            // assign workspace to this virtual output
+                            let workspace = shell.workspaces.get_mut(&workspace_id).unwrap();
+                            workspace.virtual_output_id = Some(cursor_vout_id);
+                            cursor_vout_id
+                        } else {
+                            // fallback: no virtual output found, can't proceed
+                            return;
+                        }
+                    };
+                    
+                    // switch to the workspace on its owning virtual output
+                    shell.switch_workspace_on_virtual(target_vout_id, &name);
+                    
+                    // get the most recently focused window from destination workspace's focus stack
+                    let focused_window = shell.workspaces.get(&workspace_id)
+                        .and_then(|ws| ws.focus_stack.last())
+                        .cloned();
+                    
+                    // update global focused window to match workspace focus
+                    shell.focused_window = focused_window.clone();
+                    
+                    (workspace_id, target_vout_id, focused_window)
+                };
+                
+                // move cursor to the focused window or virtual output center
+                let target_center = {
+                    let shell = self.shell.read().unwrap();
+                    
+                    // if there's a focused window, move to its center
+                    if let Some(window) = &focused_window {
+                        // get window geometry
+                        if let Some(geometry) = shell.space.element_geometry(window) {
+                            smithay::utils::Point::from((
+                                geometry.loc.x as f64 + geometry.size.w as f64 / 2.0,
+                                geometry.loc.y as f64 + geometry.size.h as f64 / 2.0,
+                            ))
+                        } else {
+                            // fallback to virtual output center if window geometry unavailable
+                            if let Some(vout) = shell.virtual_output_manager.get(target_vout_id) {
+                                let geometry = vout.logical_geometry.to_f64();
+                                smithay::utils::Point::from((
+                                    geometry.loc.x + geometry.size.w / 2.0,
+                                    geometry.loc.y + geometry.size.h / 2.0,
+                                ))
+                            } else {
+                                self.seat.get_pointer().unwrap().current_location()
+                            }
                         }
                     } else {
-                        // Clear keyboard focus when no window is focused
+                        // no focused window, move to virtual output center
+                        if let Some(vout) = shell.virtual_output_manager.get(target_vout_id) {
+                            let geometry = vout.logical_geometry.to_f64();
+                            smithay::utils::Point::from((
+                                geometry.loc.x + geometry.size.w / 2.0,
+                                geometry.loc.y + geometry.size.h / 2.0,
+                            ))
+                        } else {
+                            // fallback: keep current cursor position
+                            self.seat.get_pointer().unwrap().current_location()
+                        }
+                    }
+                };
+                
+                // synthesize pointer motion to move cursor to target virtual output
+                let pointer = self.seat.get_pointer().unwrap();
+                let surface_under = self.shell.read().unwrap().surface_under(target_center);
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                
+                pointer.motion(
+                    self,
+                    surface_under,
+                    &smithay::input::pointer::MotionEvent {
+                        location: target_center,
+                        serial,
+                        time: 0, // synthetic event
+                    },
+                );
+                pointer.frame(self);
+                
+                // update shell cursor position
+                self.shell.write().unwrap().cursor_position = target_center;
+                
+                // update keyboard focus
+                if let Some(window) = focused_window {
+                    if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone()) {
                         let keyboard = self.seat.get_keyboard().unwrap();
                         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                        keyboard.set_focus(self, None, serial);
-                        //tracing::debug!("Cleared keyboard focus after workspace switch");
+                        keyboard.set_focus(self, Some(surface), serial);
                     }
-                    
-                    self.backend.schedule_render(&output);
+                } else {
+                    // clear keyboard focus when no window is focused
+                    let keyboard = self.seat.get_keyboard().unwrap();
+                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                    keyboard.set_focus(self, None, serial);
+                }
+                
+                // schedule render for all affected outputs
+                for output in &self.outputs {
+                    self.backend.schedule_render(output);
                 }
             }
             MoveToWorkspace(name) => {
@@ -777,6 +898,20 @@ impl State {
                 info!("Quit requested via keybinding");
                 self.loop_signal.stop();
                 self.should_stop = true;
+            }
+            
+            VtSwitch(vt) => {
+                info!("VT switch requested to VT {}", vt);
+                match &mut self.backend {
+                    crate::state::BackendData::Kms(kms) => {
+                        if let Err(err) = kms.session.change_vt(vt) {
+                            error!("Failed to switch to VT {}: {}", vt, err);
+                        }
+                    }
+                    _ => {
+                        warn!("VT switching is only supported on KMS backend");
+                    }
+                }
             }
         }
     }
