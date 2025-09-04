@@ -224,7 +224,9 @@ impl Shell {
     
     /// Add an output to the shell's space
     pub fn add_output(&mut self, output: &Output) {
-        self.space.map_output(output, Point::from((0, 0)));
+        // Use the output's current configured position instead of hardcoding (0,0)
+        let position = output.current_location();
+        self.space.map_output(output, position);
         
         // update virtual outputs when physical output is added
         self.virtual_output_manager.update_all(&self.space.outputs().cloned().collect::<Vec<_>>());
@@ -244,6 +246,14 @@ impl Shell {
         }
         
         tracing::info!("Added output {} to shell space", output.name());
+    }
+    
+    /// Update output position in the space (call this after output configuration changes)
+    pub fn update_output_position(&mut self, output: &Output) {
+        let position = output.current_location();
+        // smithay's space will automatically handle position updates when we remap
+        self.space.map_output(output, position);
+        tracing::debug!("Updated output {} position to {:?}", output.name(), position);
     }
     
     /// Find virtual output containing a specific point

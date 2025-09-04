@@ -88,6 +88,7 @@ pub struct State {
     pub presentation_state: PresentationState,
     pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
+    pub cursor_bounds: Option<smithay::utils::Rectangle<f64, smithay::utils::Logical>>,
     pub pending_windows: Vec<(ToplevelSurface, Window)>,
     pub popups: PopupManager,
     #[allow(dead_code)] // will be used for server-side cursor rendering
@@ -213,7 +214,15 @@ impl OutputConfigurationHandler for State {
             tracing::debug!("Calling virtual_output_manager.update_all with {} outputs", self.outputs.len());
             shell.virtual_output_manager.update_all(&self.outputs);
             tracing::debug!("Virtual output update_all completed");
+            
+            // update output positions in the space after configuration changes
+            for output in &self.outputs {
+                shell.update_output_position(output);
+            }
         }
+        
+        // update cursor bounds after position changes
+        self.update_cursor_bounds();
         
         // trigger re-arrangement of windows and update geometry
         let mut shell = self.shell.write().unwrap();
@@ -343,6 +352,7 @@ impl State {
             presentation_state,
             shell,
             outputs: Vec::new(),
+            cursor_bounds: None,
             pending_windows: Vec::new(),
             popups: PopupManager::default(),
             cursor_state: Mutex::new(CursorStateInner::default()),
@@ -467,6 +477,39 @@ impl State {
         }
     }
     
+    /// Update cached cursor bounds based on current output positions
+    pub fn update_cursor_bounds(&mut self) {
+        if self.outputs.is_empty() {
+            self.cursor_bounds = None;
+            return;
+        }
+        
+        let shell = self.shell.read().unwrap();
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        
+        for output in &self.outputs {
+            if let Some(geometry) = shell.space.output_geometry(output) {
+                let logical_geo = geometry.to_f64();
+                min_x = min_x.min(logical_geo.loc.x);
+                min_y = min_y.min(logical_geo.loc.y);
+                max_x = max_x.max(logical_geo.loc.x + logical_geo.size.w - 1.0);
+                max_y = max_y.max(logical_geo.loc.y + logical_geo.size.h - 1.0);
+            }
+        }
+        
+        if min_x != f64::INFINITY {
+            self.cursor_bounds = Some(smithay::utils::Rectangle::new(
+                smithay::utils::Point::from((min_x, min_y)),
+                smithay::utils::Size::from((max_x - min_x + 1.0, max_y - min_y + 1.0))
+            ));
+        } else {
+            self.cursor_bounds = None;
+        }
+    }
+    
     /// Handle device addition
     pub fn device_added(&mut self, dev: libc::dev_t, path: &std::path::Path, _dh: &DisplayHandle) -> anyhow::Result<()> {
         tracing::info!("Device added: {} ({})", path.display(), dev);
@@ -580,6 +623,9 @@ impl State {
                 }
                 
                 kms.drm_devices.insert(drm_node, device);
+                
+                // update cursor bounds after potential output changes
+                self.update_cursor_bounds();
                 Ok(())
             }
             Err(err) => {

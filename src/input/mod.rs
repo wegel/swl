@@ -110,32 +110,10 @@ impl State {
                     let mut location = pointer.current_location();
                     location += delta;
                     
-                    // get output bounds and clamp pointer to screen
-                    if let Some(output) = self.outputs.first() {
-                        if let Some(mode) = output.current_mode() {
-                            let scale = output.current_scale().fractional_scale();
-                            let transform = output.current_transform();
-                            
-                            // Calculate logical size accounting for scale
-                            let mut max_x = (mode.size.w as f64 / scale) - 1.0;
-                            let mut max_y = (mode.size.h as f64 / scale) - 1.0;
-                            
-                            // Account for rotation - swap dimensions if rotated 90 or 270 degrees
-                            use smithay::utils::Transform;
-                            match transform {
-                                Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => {
-                                    std::mem::swap(&mut max_x, &mut max_y);
-                                }
-                                _ => {}
-                            }
-                            
-                            location.x = location.x.clamp(0.0, max_x);
-                            location.y = location.y.clamp(0.0, max_y);
-                        }
-                    } else {
-                        // fallback if no output
-                        location.x = location.x.max(0.0);
-                        location.y = location.y.max(0.0);
+                    // clamp cursor to cached bounds for multi-monitor support
+                    if let Some(bounds) = self.cursor_bounds {
+                        location.x = location.x.clamp(bounds.loc.x, bounds.loc.x + bounds.size.w - 1.0);
+                        location.y = location.y.clamp(bounds.loc.y, bounds.loc.y + bounds.size.h - 1.0);
                     }
                     
                     let serial = SERIAL_COUNTER.next_serial();
