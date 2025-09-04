@@ -3,7 +3,7 @@
 use indexmap::IndexMap;
 use smithay::utils::{Logical, Physical, Rectangle, Point, Size};
 use smithay::output::Output;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::workspace::WorkspaceId;
 
@@ -44,10 +44,11 @@ impl VirtualOutput {
         physical_rect: Rectangle<i32, Physical>,
     ) -> Self {
         let scale = physical_output.current_scale().fractional_scale();
+        let output_position = physical_output.current_location();
         
-        // convert physical rectangle to logical coordinates
-        let logical_x = (physical_rect.loc.x as f64 / scale) as i32;
-        let logical_y = (physical_rect.loc.y as f64 / scale) as i32;
+        // convert physical rectangle to logical coordinates, including global output position
+        let logical_x = ((physical_rect.loc.x + output_position.x) as f64 / scale) as i32;
+        let logical_y = ((physical_rect.loc.y + output_position.y) as f64 / scale) as i32;
         let logical_w = (physical_rect.size.w as f64 / scale) as i32;
         let logical_h = (physical_rect.size.h as f64 / scale) as i32;
         
@@ -64,6 +65,9 @@ impl VirtualOutput {
         
         let mut config = IndexMap::new();
         config.insert(physical_output.name(), physical_rect);
+        
+        tracing::debug!("Created virtual output {:?} with logical_geometry {:?} for output {} at position {:?}", 
+            id, logical_rect, physical_output.name(), output_position);
         
         Self {
             id,
@@ -87,12 +91,13 @@ impl VirtualOutput {
         
         for (output, physical_rect) in regions_config {
             let scale = output.current_scale().fractional_scale();
+            let output_position = output.current_location();
             
-            // convert physical rectangle to logical coordinates
+            // convert physical rectangle to logical coordinates, including global output position
             let logical_rect = Rectangle::new(
                 Point::new(
-                    (physical_rect.loc.x as f64 / scale) as i32,
-                    (physical_rect.loc.y as f64 / scale) as i32,
+                    ((physical_rect.loc.x + output_position.x) as f64 / scale) as i32,
+                    ((physical_rect.loc.y + output_position.y) as f64 / scale) as i32,
                 ),
                 Size::new(
                     (physical_rect.size.w as f64 / scale) as i32,
@@ -216,8 +221,9 @@ impl VirtualOutputManager {
             for (output_name, physical_rect) in &virtual_output.config {
                 if let Some(&output) = outputs_by_name.get(output_name) {
                     let scale = output.current_scale().fractional_scale();
+                    let output_position = output.current_location();
                     
-                    // convert physical rectangle to logical coordinates
+                    // convert physical rectangle to logical coordinates, including global output position
                     let pre_transform_logical = Size::new(
                         (physical_rect.size.w as f64 / scale) as i32,
                         (physical_rect.size.h as f64 / scale) as i32,
@@ -230,8 +236,8 @@ impl VirtualOutputManager {
                     
                     let logical_rect = Rectangle::new(
                         Point::new(
-                            (physical_rect.loc.x as f64 / scale) as i32,
-                            (physical_rect.loc.y as f64 / scale) as i32,
+                            ((physical_rect.loc.x + output_position.x) as f64 / scale) as i32,
+                            ((physical_rect.loc.y + output_position.y) as f64 / scale) as i32,
                         ),
                         logical_size,
                     );
@@ -369,6 +375,20 @@ impl VirtualOutputManager {
                     }
                 } else {
                     tracing::warn!("Invalid virtual output spec: {}", spec);
+                }
+            }
+            
+            // create default 1:1 virtual outputs for any physical outputs not mentioned in config
+            let configured_outputs: HashSet<String> = config
+                .split(';')
+                .filter_map(|spec| spec.split(':').next())
+                .map(|s| s.to_string())
+                .collect();
+                
+            for output in physical_outputs {
+                if !configured_outputs.contains(&output.name()) {
+                    tracing::debug!("Creating default virtual output for unconfigured output: {}", output.name());
+                    self.create_default(output);
                 }
             }
             

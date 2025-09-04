@@ -253,14 +253,26 @@ impl Shell {
         let position = output.current_location();
         // smithay's space will automatically handle position updates when we remap
         self.space.map_output(output, position);
+        
+        // update virtual outputs to reflect the new position
+        self.virtual_output_manager.update_all(&self.space.outputs().cloned().collect::<Vec<_>>());
+        
         tracing::debug!("Updated output {} position to {:?}", output.name(), position);
     }
     
     /// Find virtual output containing a specific point
     pub fn virtual_output_at_point(&self, point: Point<f64, Logical>) -> Option<VirtualOutputId> {
-        self.virtual_output_manager.all()
-            .find(|vout| vout.logical_geometry.to_f64().contains(point))
-            .map(|vout| vout.id)
+        tracing::debug!("virtual_output_at_point: checking point {:?}", point);
+        for vout in self.virtual_output_manager.all() {
+            tracing::debug!("virtual_output_at_point: checking vout {:?} with geometry {:?}", 
+                vout.id, vout.logical_geometry);
+            if vout.logical_geometry.to_f64().contains(point) {
+                tracing::debug!("virtual_output_at_point: found match in vout {:?}", vout.id);
+                return Some(vout.id);
+            }
+        }
+        tracing::debug!("virtual_output_at_point: no match found");
+        None
     }
     
     /// Find a fallback workspace for a virtual output when its current workspace is claimed
@@ -330,9 +342,12 @@ impl Shell {
             workspace.append_focus(&window);
         }
         
-        // Map window in smithay space and focus it
-        self.space.map_element(window.clone(), (0, 0), false);
-        tracing::debug!("Mapped window to smithay space at (0, 0)");
+        // Map window in smithay space at virtual output's global position
+        let vout_position = self.virtual_output_manager.get(virtual_output_id)
+            .map(|vout| vout.logical_geometry.loc)
+            .unwrap_or_default();
+        self.space.map_element(window.clone(), vout_position, false);
+        tracing::debug!("Mapped window to smithay space at {:?} (virtual output global position)", vout_position);
         
         tracing::debug!("Setting focus to window");
         self.focused_window = Some(window.clone());
@@ -786,11 +801,16 @@ impl Shell {
                                     let window_rect = Rectangle::from_size(fullscreen_window.geometry().size);
                                     let window_rect = Rectangle::new(location, window_rect.size);
                                     
+                                    tracing::debug!("Fullscreen render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
+                                        region.logical_rect, window_rect, region.logical_rect.overlaps(window_rect));
                                     if region.logical_rect.overlaps(window_rect) {
                                         // render only the fullscreen window
+                                        // convert global coordinates to output-relative coordinates
+                                        let output_position = output.current_location();
+                                        let output_relative_location = location - output_position;
                                         let surface_elements = fullscreen_window.render_elements(
                                             renderer,
-                                            location.to_physical_precise_round(output_scale),
+                                            output_relative_location.to_physical_precise_round(output_scale),
                                             output_scale,
                                             1.0,
                                         );
@@ -810,14 +830,21 @@ impl Shell {
                                 let window_rect = Rectangle::from_size(window.geometry().size);
                                 let window_rect = Rectangle::new(location, window_rect.size);
                                 
+                                tracing::debug!("Render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
+                                    region.logical_rect, window_rect, region.logical_rect.overlaps(window_rect));
                                 if region.logical_rect.overlaps(window_rect) {
                                     // render the window (existing window rendering code)
+                                    // convert global coordinates to output-relative coordinates
+                                    let output_position = output.current_location();
+                                    let output_relative_location = location - output_position;
                                     let surface_elements = window.render_elements(
                                         renderer,
-                                        location.to_physical_precise_round(output_scale),
+                                        output_relative_location.to_physical_precise_round(output_scale),
                                         output_scale,
                                         1.0,
                                     );
+                                    tracing::debug!("Window render_elements: global {:?} -> output-relative {:?} (physical {:?})", 
+                                        location, output_relative_location, output_relative_location.to_physical_precise_round::<_, i32>(output_scale));
                                     window_elements.extend(
                                         surface_elements.into_iter()
                                             .map(|elem| CosmicElement::Surface(elem))
@@ -838,6 +865,7 @@ impl Shell {
                         } // end of else block (not fullscreen)
                         
                         // Add window elements first (they will render behind borders in front-to-back order)
+                        tracing::debug!("Adding {} window elements to render list", window_elements.len());
                         elements.extend(window_elements);
                         
                         // Render tab bar if in tabbed mode
@@ -1672,12 +1700,14 @@ impl Shell {
                             // cache the rectangle for this window
                             workspace.window_rectangles.insert(window.clone(), rect);
                             
-                            // position the window, accounting for CSD shadow offsets
+                            // position the window, accounting for CSD shadow offsets and virtual output global position
                             let window_geom = window.geometry();
                             let position = Point::new(
-                                rect.loc.x - window_geom.loc.x,
-                                rect.loc.y - window_geom.loc.y,
+                                logical_geometry.loc.x + rect.loc.x - window_geom.loc.x,
+                                logical_geometry.loc.y + rect.loc.y - window_geom.loc.y,
                             );
+                            tracing::debug!("Tiling: positioning window at global {:?} (vout offset {:?} + local {:?} - geom {:?})", 
+                                position, logical_geometry.loc, rect.loc, window_geom.loc);
                             self.space.map_element(window.clone(), position, false);
                             
                             // resize the window if it has a toplevel surface
@@ -1722,11 +1752,11 @@ impl Shell {
                             // cache the rectangle
                             workspace.window_rectangles.insert(active_window.clone(), window_rect);
                             
-                            // map the active window, accounting for CSD shadow offsets
+                            // map the active window, accounting for CSD shadow offsets and virtual output global position
                             let window_geom = active_window.geometry();
                             let position = Point::new(
-                                window_rect.loc.x - window_geom.loc.x,
-                                window_rect.loc.y - window_geom.loc.y,
+                                logical_geometry.loc.x + window_rect.loc.x - window_geom.loc.x,
+                                logical_geometry.loc.y + window_rect.loc.y - window_geom.loc.y,
                             );
                             self.space.map_element(active_window.clone(), position, false);
                             
