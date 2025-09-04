@@ -27,13 +27,14 @@ use smithay::{
         Seat, SeatState, SeatHandler,
     },
     reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
-    utils::{Point, SERIAL_COUNTER},
+    utils::SERIAL_COUNTER,
     wayland::selection::{data_device::set_data_device_focus, primary_selection::set_primary_focus},
 };
 use tracing::{debug, error, info, trace, warn};
 use std::process::Command;
 
 use crate::State;
+use crate::utils::coordinates::GlobalPointF64;
 use self::keybindings::Action;
 
 impl State {
@@ -171,23 +172,23 @@ impl State {
                                 _ => {}
                             }
                             
-                            Point::from((
+                            GlobalPointF64::new(
                                 (event.x() * width).clamp(0.0, width - 1.0),
                                 (event.y() * height).clamp(0.0, height - 1.0),
-                            ))
+                            ).as_point()
                         } else {
                             // fallback if no mode
-                            Point::from((
+                            GlobalPointF64::new(
                                 event.x() * 1920.0,
                                 event.y() * 1080.0,
-                            ))
+                            ).as_point()
                         }
                     } else {
                         // fallback if no output
-                        Point::from((
+                        GlobalPointF64::new(
                             event.x() * 1920.0,
                             event.y() * 1080.0,
-                        ))
+                        ).as_point()
                     };
                     
                     let serial = SERIAL_COUNTER.next_serial();
@@ -768,18 +769,15 @@ impl State {
                     if let Some(window) = &focused_window {
                         // get window geometry
                         if let Some(geometry) = shell.space.element_geometry(window) {
-                            smithay::utils::Point::from((
-                                geometry.loc.x as f64 + geometry.size.w as f64 / 2.0,
-                                geometry.loc.y as f64 + geometry.size.h as f64 / 2.0,
-                            ))
+                            GlobalPointF64::from_center(geometry).as_point()
                         } else {
                             // fallback to virtual output center if window geometry unavailable
                             if let Some(vout) = shell.virtual_output_manager.get(target_vout_id) {
                                 let geometry = vout.logical_geometry.to_f64();
-                                smithay::utils::Point::from((
+                                GlobalPointF64::new(
                                     geometry.loc.x + geometry.size.w / 2.0,
                                     geometry.loc.y + geometry.size.h / 2.0,
-                                ))
+                                ).as_point()
                             } else {
                                 self.seat.get_pointer().unwrap().current_location()
                             }
@@ -788,10 +786,10 @@ impl State {
                         // no focused window, move to virtual output center
                         if let Some(vout) = shell.virtual_output_manager.get(target_vout_id) {
                             let geometry = vout.logical_geometry.to_f64();
-                            smithay::utils::Point::from((
+                            GlobalPointF64::new(
                                 geometry.loc.x + geometry.size.w / 2.0,
                                 geometry.loc.y + geometry.size.h / 2.0,
-                            ))
+                            ).as_point()
                         } else {
                             // fallback: keep current cursor position
                             self.seat.get_pointer().unwrap().current_location()

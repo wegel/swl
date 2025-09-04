@@ -501,8 +501,9 @@ impl State {
         }
         
         if min_x != f64::INFINITY {
+            use crate::utils::coordinates::GlobalPointF64;
             self.cursor_bounds = Some(smithay::utils::Rectangle::new(
-                smithay::utils::Point::from((min_x, min_y)),
+                GlobalPointF64::new(min_x, min_y).as_point(),
                 smithay::utils::Size::from((max_x - min_x + 1.0, max_y - min_y + 1.0))
             ));
         } else {

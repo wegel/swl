@@ -596,7 +596,7 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, PendingOutputConfiguration, State> 
                     );
                     return;
                 }
-                pending.position = Some(Point::from((x, y)));
+                pending.position = Some(Point::from((x, y)));  // global coordinates
             }
             zwlr_output_configuration_head_v1::Request::SetScale { scale } => {
                 let mut pending = data.lock().unwrap();

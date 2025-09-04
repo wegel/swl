@@ -24,11 +24,12 @@ use smithay::{
     input::pointer::CursorImageStatus,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     output::Output,
-    utils::{IsAlive, Logical, Point, Rectangle, Scale, Size},
+    utils::{IsAlive, Logical, Point, Rectangle, Scale},
 };
 use std::collections::HashMap;
 
 use crate::backend::render::element::{AsGlowRenderer, CosmicElement};
+use crate::utils::coordinates::{GlobalPoint, GlobalRect, OutputExt, OutputRelativePoint, SpaceExt, VirtualOutputRelativePoint, VirtualOutputRelativeRect};
 use self::workspace::{Workspace, WorkspaceId};
 use self::virtual_output::{VirtualOutputManager, VirtualOutputId};
 
@@ -98,6 +99,8 @@ impl Shell {
             next_workspace_id: 1,
             focused_window: None,
             // start cursor off-screen to avoid rendering on all outputs at startup
+            // using negative coordinates as sentinel for "not on any output"
+            // TODO: convert to Option<GlobalPoint<f64>> for better type safety
             cursor_position: Point::from((-1000.0, -1000.0)),
             cursor_status: CursorImageStatus::default_named(),
             virtual_output_manager: VirtualOutputManager::new(),
@@ -225,8 +228,8 @@ impl Shell {
     /// Add an output to the shell's space
     pub fn add_output(&mut self, output: &Output) {
         // Use the output's current configured position instead of hardcoding (0,0)
-        let position = output.current_location();
-        self.space.map_output(output, position);
+        let position = output.current_location_typed();
+        self.space.map_output(output, position.as_point());
         
         // update virtual outputs when physical output is added
         self.virtual_output_manager.update_all(&self.space.outputs().cloned().collect::<Vec<_>>());
@@ -250,9 +253,9 @@ impl Shell {
     
     /// Update output position in the space (call this after output configuration changes)
     pub fn update_output_position(&mut self, output: &Output) {
-        let position = output.current_location();
+        let position = output.current_location_typed();
         // smithay's space will automatically handle position updates when we remap
-        self.space.map_output(output, position);
+        self.space.map_output(output, position.as_point());
         
         // update virtual outputs to reflect the new position
         self.virtual_output_manager.update_all(&self.space.outputs().cloned().collect::<Vec<_>>());
@@ -344,7 +347,7 @@ impl Shell {
         
         // Map window in smithay space at virtual output's global position
         let vout_position = self.virtual_output_manager.get(virtual_output_id)
-            .map(|vout| vout.logical_geometry.loc)
+            .map(|vout| vout.logical_geometry.location().as_point())
             .unwrap_or_default();
         self.space.map_element(window.clone(), vout_position, false);
         tracing::debug!("Mapped window to smithay space at {:?} (virtual output global position)", vout_position);
@@ -412,8 +415,10 @@ impl Shell {
         
         tracing::debug!("Added window to workspace {:?} on virtual output {:?}", workspace_id, vout);
         
-        self.space.map_element(window.clone(), Point::from((0, 0)), false);
-        tracing::debug!("Mapped window to smithay space at (0, 0)");
+        // map at global origin initially (will be repositioned by tiling)
+        let initial_position = GlobalPoint::new(0, 0);
+        self.space.map_element(window.clone(), initial_position.as_point(), false);
+        tracing::debug!("Mapped window to smithay space at global origin");
         self.set_focus(window.clone());
         tracing::debug!("Set focus to new window");
         
@@ -443,7 +448,9 @@ impl Shell {
             .any(|vout| vout.active_workspace() == Some(workspace_id));
             
         if should_map {
-            self.space.map_element(window.clone(), Point::from((0, 0)), false);
+            // map at global origin initially (will be repositioned by tiling)
+            let initial_position = GlobalPoint::new(0, 0);
+            self.space.map_element(window.clone(), initial_position.as_point(), false);
         }
         
         // Set as focused
@@ -457,12 +464,16 @@ impl Shell {
         
         for window in self.space.elements() {
             // get the window's position in space
-            let location = self.space.element_location(window).unwrap_or_default();
+            let location = self.space.element_location_typed(window).unwrap_or_default();
             // get the window's bounding box (includes decorations)
             let bbox = window.bbox();
             // translate bbox to global coordinates
-            let global_bbox = Rectangle::new(
-                location + bbox.loc,
+            let bbox_global_origin = GlobalPoint::new(
+                location.as_point().x + bbox.loc.x,
+                location.as_point().y + bbox.loc.y,
+            );
+            let global_bbox = GlobalRect::from_loc_and_size(
+                bbox_global_origin,
                 bbox.size,
             );
             
@@ -523,12 +534,16 @@ impl Shell {
         // 3. Windows
         for window in self.space.elements() {
             // get the window's position in space  
-            let location = self.space.element_location(window).unwrap_or_default();
+            let location = self.space.element_location_typed(window).unwrap_or_default();
             // get the window's bounding box (includes decorations)
             let bbox = window.bbox();
             // translate bbox to global coordinates
-            let global_bbox = Rectangle::new(
-                location + bbox.loc,
+            let bbox_global_origin = GlobalPoint::new(
+                location.as_point().x + bbox.loc.x,
+                location.as_point().y + bbox.loc.y,
+            );
+            let global_bbox = GlobalRect::from_loc_and_size(
+                bbox_global_origin,
                 bbox.size,
             );
             
@@ -662,13 +677,13 @@ impl Shell {
                 // find which output this window is on
                 for output in self.space.outputs() {
                     let output_geometry = self.space.output_geometry(output).unwrap();
-                    if let Some(window_location) = self.space.element_location(window) {
+                    if let Some(window_location) = self.space.element_location_typed(window) {
                         // check if window intersects with output
-                        let window_geometry = smithay::utils::Rectangle::from_extremities(
+                        let window_geometry = GlobalRect::from_loc_and_size(
                             window_location,
-                            window_location + window.geometry().size,
+                            window.geometry().size,
                         );
-                        if output_geometry.overlaps(window_geometry) {
+                        if output_geometry.overlaps(window_geometry.as_rectangle()) {
                             return Some(output);
                         }
                     }
@@ -696,14 +711,14 @@ impl Shell {
         // collect feedback from all windows on this output
         for window in self.space.elements() {
             // check if window is on this output
-            if let Some(window_location) = self.space.element_location(window) {
+            if let Some(window_location) = self.space.element_location_typed(window) {
                 let output_geometry = self.space.output_geometry(output).unwrap();
-                let window_geometry = smithay::utils::Rectangle::from_extremities(
+                let window_geometry = GlobalRect::from_loc_and_size(
                     window_location,
-                    window_location + window.geometry().size,
+                    window.geometry().size,
                 );
                 
-                if output_geometry.overlaps(window_geometry) {
+                if output_geometry.overlaps(window_geometry.as_rectangle()) {
                     // collect feedback for this window's surface tree
                     window.take_presentation_feedback(
                         &mut output_presentation_feedback,
@@ -745,6 +760,7 @@ impl Shell {
     {
         let mut elements = Vec::new();
         let output_scale = Scale::from(output.current_scale().fractional_scale());
+        let output_position = output.current_location_typed().as_point();
         
         use smithay::wayland::shell::wlr_layer::Layer;
         
@@ -796,21 +812,21 @@ impl Shell {
                         // when there's a fullscreen window, only render that window
                         if has_fullscreen {
                             if let Some(fullscreen_window) = &workspace.fullscreen {
-                                if let Some(location) = self.space.element_location(fullscreen_window) {
+                                if let Some(location) = self.space.element_location_typed(fullscreen_window) {
                                     // check if fullscreen window intersects with this virtual output region
                                     let window_rect = Rectangle::from_size(fullscreen_window.geometry().size);
-                                    let window_rect = Rectangle::new(location, window_rect.size);
+                                    let window_rect = GlobalRect::from_loc_and_size(location, window_rect.size);
                                     
                                     tracing::debug!("Fullscreen render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
-                                        region.logical_rect, window_rect, region.logical_rect.overlaps(window_rect));
-                                    if region.logical_rect.overlaps(window_rect) {
+                                        region.logical_rect, window_rect, region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()));
+                                    if region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()) {
                                         // render only the fullscreen window
                                         // convert global coordinates to output-relative coordinates
-                                        let output_position = output.current_location();
-                                        let output_relative_location = location - output_position;
+                                        let output_position = output.current_location_typed();
+                                        let output_relative_location = location.to_output_relative(output_position);
                                         let surface_elements = fullscreen_window.render_elements(
                                             renderer,
-                                            output_relative_location.to_physical_precise_round(output_scale),
+                                            output_relative_location.as_point().to_physical_precise_round(output_scale),
                                             output_scale,
                                             1.0,
                                         );
@@ -825,26 +841,26 @@ impl Shell {
                             // normal rendering for all windows when not in fullscreen
                             // clip and translate windows to this region
                             for window in &workspace.windows {
-                            if let Some(location) = self.space.element_location(window) {
+                            if let Some(location) = self.space.element_location_typed(window) {
                                 // check if window intersects with this virtual output region
                                 let window_rect = Rectangle::from_size(window.geometry().size);
-                                let window_rect = Rectangle::new(location, window_rect.size);
+                                let window_rect = GlobalRect::from_loc_and_size(location, window_rect.size);
                                 
                                 tracing::debug!("Render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
-                                    region.logical_rect, window_rect, region.logical_rect.overlaps(window_rect));
-                                if region.logical_rect.overlaps(window_rect) {
+                                    region.logical_rect, window_rect, region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()));
+                                if region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()) {
                                     // render the window (existing window rendering code)
                                     // convert global coordinates to output-relative coordinates
-                                    let output_position = output.current_location();
-                                    let output_relative_location = location - output_position;
+                                    let output_position = output.current_location_typed();
+                                    let output_relative_location = location.to_output_relative(output_position);
                                     let surface_elements = window.render_elements(
                                         renderer,
-                                        output_relative_location.to_physical_precise_round(output_scale),
+                                        output_relative_location.as_point().to_physical_precise_round(output_scale),
                                         output_scale,
                                         1.0,
                                     );
                                     tracing::debug!("Window render_elements: global {:?} -> output-relative {:?} (physical {:?})", 
-                                        location, output_relative_location, output_relative_location.to_physical_precise_round::<_, i32>(output_scale));
+                                        location, output_relative_location, output_relative_location.as_point().to_physical_precise_round::<_, i32>(output_scale));
                                     window_elements.extend(
                                         surface_elements.into_iter()
                                             .map(|elem| CosmicElement::Surface(elem))
@@ -853,9 +869,11 @@ impl Shell {
                                     // Track focused window rectangle for border rendering
                                     if self.focused_window.as_ref() == Some(window) && !workspace.floating_windows.contains(window) {
                                         if let Some(rect) = workspace.window_rectangles.get(window) {
-                                            if rect.size.w > 0 && rect.size.h > 0 {
-                                                // Use the intended rectangle location, not the actual window location
-                                                focused_window_rect = Some((rect.loc, rect.size));
+                                            if rect.size().w > 0 && rect.size().h > 0 {
+                                                // Convert from virtual-output-relative to global coordinates
+                                                let vout_origin = vout.logical_geometry.location();
+                                                let global_location = rect.location().to_global(vout_origin);
+                                                focused_window_rect = Some((global_location.as_point(), rect.size()));
                                             }
                                         }
                                     }
@@ -876,7 +894,7 @@ impl Shell {
                                 let separator_color = [0.1, 0.1, 0.1, 1.0]; // dark gray separator
                                 
                                 // render individual tab sections with separators
-                                let tab_width = area.size.w / tiled.len() as i32;
+                                let tab_width = area.size().w / tiled.len() as i32;
                                 for (i, _window) in tiled.iter().enumerate() {
                                     let is_active = i == workspace.active_tab_index;
                                     let color = if is_active {
@@ -885,7 +903,7 @@ impl Shell {
                                         UNFOCUSED_BORDER_COLOR  // darker blue for inactive
                                     };
                                     
-                                    let tab_x = area.loc.x + (i as i32 * tab_width);
+                                    let tab_x = area.location().as_point().x + (i as i32 * tab_width);
                                     
                                     // calculate actual tab width (accounting for separator)
                                     let actual_tab_width = if i < tiled.len() - 1 {
@@ -899,9 +917,13 @@ impl Shell {
                                         (actual_tab_width, workspace::TAB_HEIGHT),
                                         color,
                                     );
+                                    // convert tab position from virtual-output-relative to output-relative for rendering
+                                    let tab_global = VirtualOutputRelativePoint::new(tab_x, area.location().as_point().y)
+                                        .to_global(vout.logical_geometry.location());
+                                    let tab_output_relative = tab_global.to_output_relative(GlobalPoint::from(output_position));
                                     let tab_element = SolidColorRenderElement::from_buffer(
                                         &tab_buffer,
-                                        Point::from((tab_x, area.loc.y)).to_physical_precise_round(output_scale),
+                                        tab_output_relative.as_point().to_physical_precise_round(output_scale),
                                         output_scale,
                                         1.0,
                                         smithay::backend::renderer::element::Kind::Unspecified,
@@ -914,9 +936,13 @@ impl Shell {
                                             (2, workspace::TAB_HEIGHT),
                                             separator_color,
                                         );
+                                        // convert separator position from virtual-output-relative to output-relative
+                                        let sep_global = VirtualOutputRelativePoint::new(tab_x + actual_tab_width, area.location().as_point().y)
+                                            .to_global(vout.logical_geometry.location());
+                                        let sep_output_relative = sep_global.to_output_relative(GlobalPoint::from(output_position));
                                         let sep_element = SolidColorRenderElement::from_buffer(
                                             &sep_buffer,
-                                            Point::from((tab_x + actual_tab_width, area.loc.y)).to_physical_precise_round(output_scale),
+                                            sep_output_relative.as_point().to_physical_precise_round(output_scale),
                                             output_scale,
                                             1.0,
                                             smithay::backend::renderer::element::Kind::Unspecified,
@@ -931,13 +957,18 @@ impl Shell {
                         
                         // 1. focused window border overlay
                         if let Some((location, rect_size)) = focused_window_rect {
+                            // Convert from global to output-relative coordinates for rendering
+                            let global_location = GlobalPoint::from(location);
+                            let output_position_typed = GlobalPoint::from(output_position);
+                            let output_relative_location = global_location.to_output_relative(output_position_typed);
+                            
                             let border_buffer = SolidColorBuffer::new(
                                 (rect_size.w + 2 * BORDER_WIDTH, rect_size.h + 2 * BORDER_WIDTH),
                                 FOCUSED_BORDER_COLOR
                             );
                             let border_element = SolidColorRenderElement::from_buffer(
                                 &border_buffer,
-                                (location - Point::from((BORDER_WIDTH, BORDER_WIDTH))).to_physical_precise_round(output_scale),
+                                output_relative_location.offset_by(-BORDER_WIDTH, -BORDER_WIDTH).as_point().to_physical_precise_round(output_scale),
                                 output_scale,
                                 1.0,
                                 smithay::backend::renderer::element::Kind::Unspecified,
@@ -948,14 +979,20 @@ impl Shell {
                         // 2. background with unfocused border color for the entire tiling area
                         if !workspace.windows.is_empty() {
                             let available_area = workspace.available_area;
-                            if available_area.size.w > 0 && available_area.size.h > 0 {
+                            if available_area.size().w > 0 && available_area.size().h > 0 {
+                                // Convert from virtual-output-relative to global, then to output-relative for rendering
+                                let vout_origin = vout.logical_geometry.location();
+                                let global_location = available_area.location().to_global(vout_origin);
+                                let output_position_typed = GlobalPoint::from(output_position);
+                                let output_relative_location = global_location.to_output_relative(output_position_typed);
+                                
                                 let background_buffer = SolidColorBuffer::new(
-                                    (available_area.size.w, available_area.size.h),
+                                    (available_area.size().w, available_area.size().h),
                                     UNFOCUSED_BORDER_COLOR
                                 );
                                 let background_element = SolidColorRenderElement::from_buffer(
                                     &background_buffer,
-                                    available_area.loc.to_physical_precise_round(output_scale),
+                                    output_relative_location.as_point().to_physical_precise_round(output_scale),
                                     output_scale,
                                     1.0,
                                     smithay::backend::renderer::element::Kind::Unspecified,
@@ -1543,6 +1580,7 @@ impl Shell {
     }
 
     /// Get all workspace names on a given physical output
+    #[allow(dead_code)]
     pub fn workspace_names_on_output(&self, output: &Output) -> Vec<String> {
         self.virtual_output_manager.virtual_outputs_for_physical(output)
             .iter()
@@ -1622,27 +1660,54 @@ impl Shell {
             })
             .collect();
         
-        // Calculate non-exclusive zone from physical output
+        // Calculate non-exclusive zone from physical output (in output-relative coordinates)
         let non_exclusive_zone = {
             let layer_map = smithay::desktop::layer_map_for_output(output);
             layer_map.non_exclusive_zone()
         };
+        
+        // Convert non-exclusive zone to global coordinates
+        let output_position = output.current_location_typed();
+        let non_exclusive_zone_origin = OutputRelativePoint::new(
+            non_exclusive_zone.loc.x,
+            non_exclusive_zone.loc.y,
+        );
+        let non_exclusive_zone_global_origin = non_exclusive_zone_origin.to_global(output_position);
+        let non_exclusive_zone_global = GlobalRect::from_loc_and_size(
+            non_exclusive_zone_global_origin,
+            non_exclusive_zone.size,
+        );
         
         for (workspace_name, logical_geometry) in virtual_output_info {
             if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
                 // Intersect virtual output geometry with non-exclusive zone
                 // For now, assume 1:1 virtual output, so use the non-exclusive zone directly
                 // TODO: For multi-virtual output, need to calculate intersection properly
-                let available_geometry = if self.virtual_output_manager.virtual_outputs_for_physical(output).len() == 1 {
-                    // Single virtual output - use full non-exclusive zone
-                    non_exclusive_zone
+                let available_geometry_global = if self.virtual_output_manager.virtual_outputs_for_physical(output).len() == 1 {
+                    // Single virtual output - use full non-exclusive zone in global coords
+                    non_exclusive_zone_global.as_rectangle()
                 } else {
                     // Multiple virtual outputs - intersect with virtual output bounds
                     // This is a simplified version - proper implementation would clip to virtual output region
-                    non_exclusive_zone.intersection(logical_geometry).unwrap_or(logical_geometry)
+                    non_exclusive_zone_global.as_rectangle().intersection(logical_geometry.as_rectangle()).unwrap_or(logical_geometry.as_rectangle())
                 };
                 
-                workspace.update_output_geometry(available_geometry);
+                // Convert to virtual-output-relative coordinates (translate to origin)
+                let vout_origin = logical_geometry.location();
+                let available_global_origin = GlobalPoint::new(
+                    available_geometry_global.loc.x,
+                    available_geometry_global.loc.y,
+                );
+                let available_relative_origin = VirtualOutputRelativePoint::new(
+                    available_global_origin.as_point().x - vout_origin.as_point().x,
+                    available_global_origin.as_point().y - vout_origin.as_point().y,
+                );
+                let available_geometry_relative = VirtualOutputRelativeRect::from_loc_and_size(
+                    available_relative_origin,
+                    available_geometry_global.size,
+                );
+                
+                workspace.update_output_geometry(available_geometry_relative);
                 
                 // clean up dead windows first
                 workspace.refresh();
@@ -1653,10 +1718,10 @@ impl Shell {
                 // handle fullscreen window first
                 if let Some(fullscreen_window) = &workspace.fullscreen {
                     // use virtual output's geometry for fullscreen size
-                    let fullscreen_size = logical_geometry.size;
+                    let fullscreen_size = logical_geometry.size();
                     
                     // position fullscreen window at virtual output origin
-                    self.space.map_element(fullscreen_window.clone(), logical_geometry.loc, false);
+                    self.space.map_element(fullscreen_window.clone(), logical_geometry.location().as_point(), false);
                     
                     if let Some(toplevel) = fullscreen_window.toplevel() {
                         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
@@ -1698,17 +1763,20 @@ impl Shell {
                         // apply positions and sizes
                         for (window, rect) in positions {
                             // cache the rectangle for this window
-                            workspace.window_rectangles.insert(window.clone(), rect);
+                            workspace.window_rectangles.insert(window.clone(), VirtualOutputRelativeRect::from(rect));
                             
                             // position the window, accounting for CSD shadow offsets and virtual output global position
                             let window_geom = window.geometry();
-                            let position = Point::new(
-                                logical_geometry.loc.x + rect.loc.x - window_geom.loc.x,
-                                logical_geometry.loc.y + rect.loc.y - window_geom.loc.y,
+                            let vout_origin = logical_geometry.location();
+                            let rect_origin = VirtualOutputRelativePoint::new(rect.loc.x, rect.loc.y);
+                            let window_global = rect_origin.to_global(vout_origin);
+                            let position = GlobalPoint::new(
+                                window_global.as_point().x - window_geom.loc.x,
+                                window_global.as_point().y - window_geom.loc.y,
                             );
                             tracing::debug!("Tiling: positioning window at global {:?} (vout offset {:?} + local {:?} - geom {:?})", 
-                                position, logical_geometry.loc, rect.loc, window_geom.loc);
-                            self.space.map_element(window.clone(), position, false);
+                                position, vout_origin.as_point(), rect.loc, window_geom.loc);
+                            self.space.map_element(window.clone(), position.as_point(), false);
                             
                             // resize the window if it has a toplevel surface
                             if let Some(toplevel) = window.toplevel() {
@@ -1744,21 +1812,21 @@ impl Shell {
                         
                         // show only the active tab
                         if let Some(active_window) = windows_to_tile.get(workspace.active_tab_index) {
-                            let window_rect = Rectangle {
-                                loc: Point::from((available_geometry.loc.x, available_geometry.loc.y + workspace::TAB_HEIGHT)),
-                                size: Size::from((available_geometry.size.w, available_geometry.size.h - workspace::TAB_HEIGHT)),
-                            };
+                            let available_area = workspace.available_area;
+                            let window_rect = VirtualOutputRelativeRect::with_y_offset(&available_area, workspace::TAB_HEIGHT);
                             
                             // cache the rectangle
                             workspace.window_rectangles.insert(active_window.clone(), window_rect);
                             
                             // map the active window, accounting for CSD shadow offsets and virtual output global position
                             let window_geom = active_window.geometry();
-                            let position = Point::new(
-                                logical_geometry.loc.x + window_rect.loc.x - window_geom.loc.x,
-                                logical_geometry.loc.y + window_rect.loc.y - window_geom.loc.y,
+                            let vout_origin = logical_geometry.location();
+                            let window_global = window_rect.location().to_global(vout_origin);
+                            let position = GlobalPoint::new(
+                                window_global.as_point().x - window_geom.loc.x,
+                                window_global.as_point().y - window_geom.loc.y,
                             );
-                            self.space.map_element(active_window.clone(), position, false);
+                            self.space.map_element(active_window.clone(), position.as_point(), false);
                             
                             // configure the window
                             if let Some(toplevel) = active_window.toplevel() {
@@ -1766,8 +1834,8 @@ impl Shell {
                                 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
                                 
                                 toplevel.with_pending_state(|state| {
-                                    state.size = Some(window_rect.size);
-                                    state.bounds = Some(window_rect.size);
+                                    state.size = Some(window_rect.size());
+                                    state.bounds = Some(window_rect.size());
                                     
                                     // force server-side decorations (no client decorations)
                                     state.decoration_mode = Some(Mode::ServerSide);
@@ -1836,13 +1904,13 @@ impl Shell {
             }
             
             let area = workspace.available_area;
-            if point.y >= area.loc.y as f64 
-                && point.y < (area.loc.y + workspace::TAB_HEIGHT) as f64 {
+            if point.y >= area.location().as_point().y as f64 
+                && point.y < (area.location().as_point().y + workspace::TAB_HEIGHT) as f64 {
                 
                 let tiled_count = workspace.tiled_windows().count();
                 if tiled_count > 0 {
-                    let tab_width = area.size.w / tiled_count as i32;
-                    let relative_x = (point.x - area.loc.x as f64) as i32;
+                    let tab_width = area.size().w / tiled_count as i32;
+                    let relative_x = (point.x - area.location().as_point().x as f64) as i32;
                     
                     // Find which tab was clicked, accounting for separators
                     for i in 0..tiled_count {

@@ -2,12 +2,13 @@
 
 use smithay::{
     desktop::Window,
-    utils::{Logical, Rectangle},
+    utils::{Logical, Point, Rectangle, Size},
 };
 use tracing::debug;
 
 // Import border width from shell module
 use crate::shell::BORDER_WIDTH;
+use crate::utils::coordinates::VirtualOutputRelativeRect;
 
 /// Tiling layout implementation inspired by dwm/dwl
 #[derive(Debug)]
@@ -19,12 +20,12 @@ pub struct TilingLayout {
     n_master: usize,
     
     /// Available area for tiling (excluding exclusive zones)
-    available_area: Rectangle<i32, Logical>,
+    available_area: VirtualOutputRelativeRect,
 }
 
 impl TilingLayout {
     /// Create a new tiling layout with default settings
-    pub fn new(available_area: Rectangle<i32, Logical>) -> Self {
+    pub fn new(available_area: impl Into<VirtualOutputRelativeRect>) -> Self {
         // check environment variables for configuration
         let master_factor = std::env::var("SWL_MASTER_FACTOR")
             .ok()
@@ -37,13 +38,15 @@ impl TilingLayout {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1);
         
+        let available_area_rect = available_area.into();
+        
         debug!("TilingLayout initialized: master_factor={}, n_master={}, available_area={:?}", 
-               master_factor, n_master, available_area);
+               master_factor, n_master, available_area_rect);
         
         Self {
             master_factor,
             n_master,
-            available_area,
+            available_area: available_area_rect,
         }
     }
     
@@ -58,10 +61,10 @@ impl TilingLayout {
         let mut positions = Vec::with_capacity(n);
         
         // use the available area's position and size
-        let area_x = self.available_area.loc.x;
-        let area_y = self.available_area.loc.y;
-        let area_width = self.available_area.size.w;
-        let area_height = self.available_area.size.h;
+        let area_x = self.available_area.location().as_point().x;
+        let area_y = self.available_area.location().as_point().y;
+        let area_width = self.available_area.size().w;
+        let area_height = self.available_area.size().h;
         
         // Calculate space available for windows (excluding all borders)
         let (master_window_width, stack_window_width) = if n > self.n_master {
@@ -117,9 +120,10 @@ impl TilingLayout {
             
             let w = master_window_width;
             
+            // create virtual-output-relative rectangle for this window
             let rect = Rectangle::new(
-                (x, y).into(),
-                (w.max(1), h.max(1)).into(), // ensure minimum size
+                Point::from((x, y)),  // relative to virtual output origin
+                Size::from((w.max(1), h.max(1))), // ensure minimum size
             );
             positions.push((windows[i].clone(), rect));
         }
@@ -165,9 +169,10 @@ impl TilingLayout {
                 
                 let w = stack_window_width;
                 
+                // create virtual-output-relative rectangle for this window
                 let rect = Rectangle::new(
-                    (x, y).into(),
-                    (w.max(1), h.max(1)).into(), // ensure minimum size
+                    Point::from((x, y)),  // relative to virtual output origin
+                    Size::from((w.max(1), h.max(1))), // ensure minimum size
                 );
                 positions.push((windows[stack_i].clone(), rect));
             }
@@ -195,9 +200,9 @@ impl TilingLayout {
     }
     
     /// Update the available area (for when output or exclusive zones change)
-    pub fn set_available_area(&mut self, area: Rectangle<i32, Logical>) {
-        self.available_area = area;
-        debug!("Available area updated to {:?}", area);
+    pub fn set_available_area(&mut self, area: impl Into<VirtualOutputRelativeRect>) {
+        self.available_area = area.into();
+        debug!("Available area updated to {:?}", self.available_area);
     }
     
     /// Get current master factor

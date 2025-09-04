@@ -563,7 +563,7 @@ fn populate_modes(
         Some(output_mode),
         Some(transform),
         Some(Scale::Fractional(scale)),
-        Some(Point::from((0, 0))), // simplified - cosmic-comp calculates position
+        Some(Point::from((0, 0))), // global coordinates - simplified, cosmic-comp calculates position
     );
 
     Ok(())

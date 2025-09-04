@@ -2,12 +2,13 @@
 
 use smithay::{
     desktop::Window,
-    utils::{IsAlive, Logical, Rectangle, Size},
+    utils::{IsAlive, Point, Rectangle, Size},
 };
 use std::collections::{HashMap, HashSet};
 
 use super::tiling::TilingLayout;
 use super::virtual_output::VirtualOutputId;
+use crate::utils::coordinates::VirtualOutputRelativeRect;
 
 /// Unique identifier for a workspace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,10 +59,10 @@ pub struct Workspace {
     pub needs_arrange: bool,
     
     /// Cached window rectangles from last tiling arrangement
-    pub window_rectangles: HashMap<Window, Rectangle<i32, Logical>>,
+    pub window_rectangles: HashMap<Window, VirtualOutputRelativeRect>,
     
     /// Cached available area (non-exclusive zone) from last arrangement
-    pub available_area: Rectangle<i32, Logical>,
+    pub available_area: VirtualOutputRelativeRect,
     
     /// Current layout mode
     pub layout_mode: LayoutMode,
@@ -81,11 +82,21 @@ impl Workspace {
             windows: Vec::new(),
             fullscreen: None,
             focus_stack: Vec::new(),
-            tiling: TilingLayout::new(Rectangle::from_size(Size::from((1920, 1080)))), // default size
+            tiling: TilingLayout::new(VirtualOutputRelativeRect::from(
+                Rectangle::new(
+                    Point::from((0, 0)),  // virtual output relative origin
+                    Size::from((1920, 1080)),  // default size
+                )
+            )),
             floating_windows: HashSet::new(),
             needs_arrange: false,
             window_rectangles: HashMap::new(),
-            available_area: Rectangle::from_size(Size::from((1920, 1080))), // default size
+            available_area: VirtualOutputRelativeRect::from(
+                Rectangle::new(
+                    Point::from((0, 0)),  // virtual output relative origin
+                    Size::from((1920, 1080)),  // default size
+                )
+            ),
             layout_mode: LayoutMode::Tiling,
             active_tab_index: 0,
             virtual_output_id: None,
@@ -185,12 +196,13 @@ impl Workspace {
         self.focus_stack.push(window.clone());
     }
     
-    /// Update the output area for tiling
-    pub fn update_output_geometry(&mut self, size: Rectangle<i32, Logical>) {
+    /// Update the output area for tiling (in virtual-output-relative coordinates)
+    pub fn update_output_geometry(&mut self, size: impl Into<VirtualOutputRelativeRect>) {
+        let size_rect = size.into();
         // Only update if the area actually changed
-        if self.available_area != size {
-            self.available_area = size;
-            self.tiling.set_available_area(size);
+        if self.available_area.as_rectangle() != size_rect.as_rectangle() {
+            self.available_area = size_rect;
+            self.tiling.set_available_area(size_rect.as_rectangle());
             self.needs_arrange = true;
         }
     }

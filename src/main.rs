@@ -16,6 +16,7 @@ mod input;
 mod shell;
 mod startup;
 mod state;
+mod utils;
 mod wayland;
 use state::State;
 

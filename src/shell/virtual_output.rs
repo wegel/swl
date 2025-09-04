@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use indexmap::IndexMap;
-use smithay::utils::{Logical, Physical, Rectangle, Point, Size};
+use smithay::utils::{Physical, Rectangle, Point, Size};
 use smithay::output::Output;
 use std::collections::{HashMap, HashSet};
 
 use super::workspace::WorkspaceId;
+use crate::utils::coordinates::{GlobalPoint, GlobalRect, OutputExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VirtualOutputId(pub u32);
@@ -13,7 +14,7 @@ pub struct VirtualOutputId(pub u32);
 #[derive(Debug, Clone)]
 pub struct VirtualRegion {
     pub physical_output: Output,
-    pub logical_rect: Rectangle<i32, Logical>,
+    pub logical_rect: GlobalRect,
 }
 
 #[derive(Debug)]
@@ -21,7 +22,7 @@ pub struct VirtualOutput {
     pub id: VirtualOutputId,
     pub config: IndexMap<String, Rectangle<i32, Physical>>, // output_name -> rect
     pub regions: Vec<VirtualRegion>,
-    pub logical_geometry: Rectangle<i32, Logical>,
+    pub logical_geometry: GlobalRect,
     pub active_workspace: Option<WorkspaceId>,  // TODO: Make private once Shell APIs are updated
 }
 
@@ -44,17 +45,17 @@ impl VirtualOutput {
         physical_rect: Rectangle<i32, Physical>,
     ) -> Self {
         let scale = physical_output.current_scale().fractional_scale();
-        let output_position = physical_output.current_location();
+        let output_position = physical_output.current_location_typed();
         
         // convert physical rectangle to logical coordinates, including global output position
-        let logical_x = ((physical_rect.loc.x + output_position.x) as f64 / scale) as i32;
-        let logical_y = ((physical_rect.loc.y + output_position.y) as f64 / scale) as i32;
+        let logical_x = ((physical_rect.loc.x + output_position.as_point().x) as f64 / scale) as i32;
+        let logical_y = ((physical_rect.loc.y + output_position.as_point().y) as f64 / scale) as i32;
         let logical_w = (physical_rect.size.w as f64 / scale) as i32;
         let logical_h = (physical_rect.size.h as f64 / scale) as i32;
         
         
-        let logical_rect = Rectangle::new(
-            Point::new(logical_x, logical_y),
+        let logical_rect = GlobalRect::new(
+            GlobalPoint::new(logical_x, logical_y),
             Size::new(logical_w, logical_h),
         );
         
@@ -86,18 +87,19 @@ impl VirtualOutput {
     ) -> Self {
         let mut config = IndexMap::new();
         let mut regions = Vec::new();
-        let mut logical_bounds_min: Point<i32, Logical> = Point::new(i32::MAX, i32::MAX);
-        let mut logical_bounds_max: Point<i32, Logical> = Point::new(i32::MIN, i32::MIN);
+        // track bounds in global coordinates
+        let mut logical_bounds_min = GlobalPoint::new(i32::MAX, i32::MAX);
+        let mut logical_bounds_max = GlobalPoint::new(i32::MIN, i32::MIN);
         
         for (output, physical_rect) in regions_config {
             let scale = output.current_scale().fractional_scale();
-            let output_position = output.current_location();
+            let output_position = output.current_location_typed();
             
             // convert physical rectangle to logical coordinates, including global output position
-            let logical_rect = Rectangle::new(
-                Point::new(
-                    ((physical_rect.loc.x + output_position.x) as f64 / scale) as i32,
-                    ((physical_rect.loc.y + output_position.y) as f64 / scale) as i32,
+            let logical_rect = GlobalRect::new(
+                GlobalPoint::new(
+                    ((physical_rect.loc.x + output_position.as_point().x) as f64 / scale) as i32,
+                    ((physical_rect.loc.y + output_position.as_point().y) as f64 / scale) as i32,
                 ),
                 Size::new(
                     (physical_rect.size.w as f64 / scale) as i32,
@@ -106,10 +108,14 @@ impl VirtualOutput {
             );
             
             // track overall logical bounds
-            logical_bounds_min.x = logical_bounds_min.x.min(logical_rect.loc.x);
-            logical_bounds_min.y = logical_bounds_min.y.min(logical_rect.loc.y);
-            logical_bounds_max.x = logical_bounds_max.x.max(logical_rect.loc.x + logical_rect.size.w);
-            logical_bounds_max.y = logical_bounds_max.y.max(logical_rect.loc.y + logical_rect.size.h);
+            logical_bounds_min = GlobalPoint::new(
+                logical_bounds_min.as_point().x.min(logical_rect.as_rectangle().loc.x),
+                logical_bounds_min.as_point().y.min(logical_rect.as_rectangle().loc.y),
+            );
+            logical_bounds_max = GlobalPoint::new(
+                logical_bounds_max.as_point().x.max(logical_rect.as_rectangle().loc.x + logical_rect.as_rectangle().size.w),
+                logical_bounds_max.as_point().y.max(logical_rect.as_rectangle().loc.y + logical_rect.as_rectangle().size.h),
+            );
             
             config.insert(output.name(), physical_rect);
             regions.push(VirtualRegion {
@@ -119,17 +125,17 @@ impl VirtualOutput {
         }
         
         // create the overall logical geometry
-        let logical_geometry = if logical_bounds_min.x != i32::MAX {
-            Rectangle::new(
+        let logical_geometry = if logical_bounds_min.as_point().x != i32::MAX {
+            GlobalRect::new(
                 logical_bounds_min,
                 Size::new(
-                    logical_bounds_max.x - logical_bounds_min.x,
-                    logical_bounds_max.y - logical_bounds_min.y,
+                    logical_bounds_max.as_point().x - logical_bounds_min.as_point().x,
+                    logical_bounds_max.as_point().y - logical_bounds_min.as_point().y,
                 ),
             )
         } else {
             // fallback for empty regions
-            Rectangle::from_size(Size::from((1920, 1080)))
+            GlobalRect::new(GlobalPoint::new(0, 0), Size::from((1920, 1080)))
         };
         
         Self {
@@ -145,8 +151,9 @@ impl VirtualOutput {
     #[allow(dead_code)]
     pub fn update_geometry(&mut self) {
         self.regions.clear();
-        let _logical_bounds_min: Point<i32, Logical> = Point::new(i32::MAX, i32::MAX);
-        let _logical_bounds_max: Point<i32, Logical> = Point::new(i32::MIN, i32::MIN);
+        // bounds tracking would go here if needed for update
+        let _logical_bounds_min = GlobalPoint::new(i32::MAX, i32::MAX);
+        let _logical_bounds_max = GlobalPoint::new(i32::MIN, i32::MIN);
         
         for (output_name, _physical_rect) in &self.config {
             // find the physical output by name (we'll need access to outputs for this)
@@ -180,9 +187,10 @@ impl VirtualOutputManager {
         
         
         let mode = output.current_mode().unwrap();
+        // physical rectangle at origin of this output (in physical coordinates)
         let physical_rect = Rectangle::new(
-            Point::new(0, 0),
-            Size::new(mode.size.w, mode.size.h),
+            Point::new(0, 0),  // origin in physical space
+            mode.size,
         );
         
         let virtual_output = VirtualOutput::from_split(
@@ -215,13 +223,13 @@ impl VirtualOutputManager {
         // update each virtual output's regions
         for (vout_id, virtual_output) in self.virtual_outputs.iter_mut() {
             virtual_output.regions.clear();
-            let mut logical_bounds_min: Point<i32, Logical> = Point::new(i32::MAX, i32::MAX);
-            let mut logical_bounds_max: Point<i32, Logical> = Point::new(i32::MIN, i32::MIN);
+            let mut logical_bounds_min = GlobalPoint::new(i32::MAX, i32::MAX);
+            let mut logical_bounds_max = GlobalPoint::new(i32::MIN, i32::MIN);
             
             for (output_name, physical_rect) in &virtual_output.config {
                 if let Some(&output) = outputs_by_name.get(output_name) {
                     let scale = output.current_scale().fractional_scale();
-                    let output_position = output.current_location();
+                    let output_position = output.current_location_typed();
                     
                     // convert physical rectangle to logical coordinates, including global output position
                     let pre_transform_logical = Size::new(
@@ -234,19 +242,23 @@ impl VirtualOutputManager {
                     // so we only apply scaling, not transform
                     let logical_size = pre_transform_logical;
                     
-                    let logical_rect = Rectangle::new(
-                        Point::new(
-                            ((physical_rect.loc.x + output_position.x) as f64 / scale) as i32,
-                            ((physical_rect.loc.y + output_position.y) as f64 / scale) as i32,
+                    let logical_rect = GlobalRect::new(
+                        GlobalPoint::new(
+                            ((physical_rect.loc.x + output_position.as_point().x) as f64 / scale) as i32,
+                            ((physical_rect.loc.y + output_position.as_point().y) as f64 / scale) as i32,
                         ),
                         logical_size,
                     );
                     
                     // track overall logical bounds
-                    logical_bounds_min.x = logical_bounds_min.x.min(logical_rect.loc.x);
-                    logical_bounds_min.y = logical_bounds_min.y.min(logical_rect.loc.y);
-                    logical_bounds_max.x = logical_bounds_max.x.max(logical_rect.loc.x + logical_rect.size.w);
-                    logical_bounds_max.y = logical_bounds_max.y.max(logical_rect.loc.y + logical_rect.size.h);
+                    logical_bounds_min = GlobalPoint::new(
+                        logical_bounds_min.as_point().x.min(logical_rect.as_rectangle().loc.x),
+                        logical_bounds_min.as_point().y.min(logical_rect.as_rectangle().loc.y),
+                    );
+                    logical_bounds_max = GlobalPoint::new(
+                        logical_bounds_max.as_point().x.max(logical_rect.as_rectangle().loc.x + logical_rect.as_rectangle().size.w),
+                        logical_bounds_max.as_point().y.max(logical_rect.as_rectangle().loc.y + logical_rect.as_rectangle().size.h),
+                    );
                     
                     virtual_output.regions.push(VirtualRegion {
                         physical_output: output.clone(),
@@ -256,12 +268,12 @@ impl VirtualOutputManager {
             }
             
             // update logical geometry
-            if logical_bounds_min.x != i32::MAX {
-                let new_geometry = Rectangle::new(
+            if logical_bounds_min.as_point().x != i32::MAX {
+                let new_geometry = GlobalRect::new(
                     logical_bounds_min,
                     Size::new(
-                        logical_bounds_max.x - logical_bounds_min.x,
-                        logical_bounds_max.y - logical_bounds_min.y,
+                        logical_bounds_max.as_point().x - logical_bounds_min.as_point().x,
+                        logical_bounds_max.as_point().y - logical_bounds_min.as_point().y,
                     ),
                 );
                 
@@ -422,8 +434,9 @@ impl VirtualOutputManager {
                 let h = h_str.parse::<i32>().ok()?;
                 
                 
+                // create physical rectangle from parsed values
                 let rect = Rectangle::new(
-                    Point::new(x, y),
+                    Point::new(x, y),  // position in physical coordinates
                     Size::new(w, h),
                 );
                 
