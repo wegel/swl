@@ -670,22 +670,36 @@ impl Shell {
     
     /// Find which output a surface is visible on
     pub fn visible_output_for_surface(&self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> Option<&Output> {
-        // find the window containing this surface
-        // tracing::debug!("Looking for output for surface");
+        // Try to find the output by locating the window that contains this surface
+        // (including subsurfaces and popups), then intersecting that window with outputs.
         for window in self.space.elements() {
-            if window.toplevel().unwrap().wl_surface() == surface {
-                // find which output this window is on
-                for output in self.space.outputs() {
-                    let output_geometry = self.space.output_geometry(output).unwrap();
-                    if let Some(window_location) = self.space.element_location_typed(window) {
-                        // check if window intersects with output
-                        let window_geometry = GlobalRect::from_loc_and_size(
-                            window_location,
-                            window.geometry().size,
-                        );
-                        if output_geometry.overlaps(window_geometry.as_rectangle()) {
-                            return Some(output);
-                        }
+            // Fast path: direct toplevel match
+            let mut contains_surface = window.toplevel().map_or(false, |t| t.wl_surface() == surface);
+
+            // If not a direct match, scan the window's full surface tree (includes popups when tracked)
+            if !contains_surface {
+                window.with_surfaces(|s, _| {
+                    if s == surface {
+                        contains_surface = true;
+                    }
+                });
+            }
+
+            if !contains_surface {
+                continue;
+            }
+
+            // We found the window that owns this surface; determine which output it is visible on
+            for output in self.space.outputs() {
+                let output_geometry = self.space.output_geometry(output).unwrap();
+                if let Some(window_location) = self.space.element_location_typed(window) {
+                    // check if window intersects with output
+                    let window_geometry = GlobalRect::from_loc_and_size(
+                        window_location,
+                        window.geometry().size,
+                    );
+                    if output_geometry.overlaps(window_geometry.as_rectangle()) {
+                        return Some(output);
                     }
                 }
             }

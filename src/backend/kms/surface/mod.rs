@@ -992,18 +992,15 @@ impl SurfaceThreadState {
         self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
         
         
-        // send frame callbacks to all windows on this output
+        // send frame callbacks to all windows (including their popups) on this output
         let shell = self.shell.read().unwrap();
         for window in shell.space.elements() {
-            if let Some(toplevel) = window.toplevel() {
-                send_frames_surface_tree(
-                    toplevel.wl_surface(),
-                    output,
-                    clock,
-                    None,
-                    |_, _| Some(output.clone()),  // always send for now
-                );
-            }
+            window.send_frame(
+                output,
+                clock,
+                None,
+                |_, _| Some(output.clone()),  // always send for now
+            );
         }
         drop(shell);  // release the read lock
         
