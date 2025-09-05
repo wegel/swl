@@ -1667,7 +1667,7 @@ impl Shell {
             .into_iter()
             .filter_map(|vout| {
                 if let Some(workspace_name) = &vout.active_workspace {
-                    Some((workspace_name.clone(), vout.logical_geometry))
+                    Some((workspace_name.clone(), vout.logical_geometry, vout.id))
                 } else {
                     None
                 }
@@ -1692,7 +1692,7 @@ impl Shell {
             non_exclusive_zone.size,
         );
         
-        for (workspace_name, logical_geometry) in virtual_output_info {
+        for (workspace_name, logical_geometry, _vout_id) in virtual_output_info {
             if let Some(workspace) = self.workspaces.get_mut(&workspace_name) {
                 // Intersect virtual output geometry with non-exclusive zone
                 // For now, assume 1:1 virtual output, so use the non-exclusive zone directly
@@ -1731,8 +1731,28 @@ impl Shell {
                 
                 // handle fullscreen window first
                 if let Some(fullscreen_window) = &workspace.fullscreen {
-                    // use virtual output's geometry for fullscreen size
-                    let fullscreen_size = logical_geometry.size();
+                    // for fullscreen, we need the actual output's logical size after transform
+                    // the virtual output's logical_geometry might be pre-transform
+                    let fullscreen_size = if let Some(mode) = output.current_mode() {
+                        let transform = output.current_transform();
+                        let scale = output.current_scale().fractional_scale();
+                        
+                        // apply transform to get the logical size
+                        let (width, height) = match transform {
+                            smithay::utils::Transform::_90 | smithay::utils::Transform::_270 |
+                            smithay::utils::Transform::Flipped90 | smithay::utils::Transform::Flipped270 => {
+                                // rotated: swap width and height
+                                ((mode.size.h as f64 / scale) as i32, (mode.size.w as f64 / scale) as i32)
+                            }
+                            _ => {
+                                // not rotated
+                                ((mode.size.w as f64 / scale) as i32, (mode.size.h as f64 / scale) as i32)
+                            }
+                        };
+                        smithay::utils::Size::from((width, height))
+                    } else {
+                        logical_geometry.size()
+                    };
                     
                     // position fullscreen window at virtual output origin
                     self.space.map_element(fullscreen_window.clone(), logical_geometry.location().as_point(), false);
