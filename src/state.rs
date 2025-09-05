@@ -23,7 +23,10 @@ use smithay::{
             with_surfaces_surface_tree,
         },
     },
-    input::{Seat, SeatState},
+    input::{
+        keyboard::XkbConfig,
+        Seat, SeatState,
+    },
     output::Output,
     wayland::{
         compositor::CompositorState,
@@ -301,8 +304,46 @@ impl State {
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&display_handle, "seat0");
         
+        // parse keyboard configuration from environment variables
+        let xkb_layout = std::env::var("SWL_XKB_LAYOUT")
+            .unwrap_or_else(|_| "us".to_string())
+            .leak();
+        let xkb_variant = std::env::var("SWL_XKB_VARIANT")
+            .unwrap_or_else(|_| String::new())
+            .leak();
+        let xkb_model = std::env::var("SWL_XKB_MODEL")
+            .unwrap_or_else(|_| String::new())
+            .leak();
+        let xkb_options = std::env::var("SWL_XKB_OPTIONS")
+            .ok()
+            .filter(|s| !s.is_empty());
+        
+        let repeat_rate = std::env::var("SWL_REPEAT_RATE")
+            .ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(25);
+        let repeat_delay = std::env::var("SWL_REPEAT_DELAY")
+            .ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(400);
+        
+        // create XkbConfig with leaked strings for 'static lifetime
+        let xkb_config = XkbConfig {
+            rules: "",  // use default rules
+            model: xkb_model,
+            layout: xkb_layout,
+            variant: xkb_variant,
+            options: xkb_options.clone(),
+        };
+        
+        tracing::info!(
+            "Configuring keyboard: layout='{}', variant='{}', model='{}', options={:?}, rate={}, delay={}",
+            xkb_config.layout, xkb_config.variant, xkb_config.model, xkb_config.options,
+            repeat_rate, repeat_delay
+        );
+        
         // add pointer and keyboard capabilities
-        seat.add_keyboard(Default::default(), 200, 25).unwrap();
+        seat.add_keyboard(xkb_config, repeat_delay, repeat_rate).unwrap();
         seat.add_pointer();
         
         // add cursor status to seat user data (following cosmic-comp)
