@@ -59,7 +59,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -274,6 +274,9 @@ struct SurfaceThreadState {
     // frame callback sequence number to prevent empty-damage commit busy loops
     frame_callback_seq: usize,
     
+    // render frequency tracking
+    render_count: u32,
+    last_freq_log: std::time::Instant,
 }
 
 /// Dmabuf feedback for a surface
@@ -370,7 +373,7 @@ impl Surface {
     
     /// Schedule a render for this surface
     pub fn schedule_render(&self) {
-        // debug!("Render scheduled for output {}", self.output.name());
+        // info!("[SCHEDULE] schedule_render called for {}", self.output.name());
         let _ = self.thread_command.send(ThreadCommand::ScheduleRender);
     }
     
@@ -619,6 +622,8 @@ fn surface_thread(
         shell,
         seat,
         frame_callback_seq: 0,
+        render_count: 0,
+        last_freq_log: Instant::now(),
         loop_handle: event_loop.handle(),
         clock,
     };
@@ -799,6 +804,7 @@ impl SurfaceThreadState {
     }
     
     fn queue_redraw(&mut self) {
+        // info!("[QUEUE_REDRAW] called for {}", self.output.name());
         self.queue_redraw_force(false);
     }
     
@@ -892,6 +898,7 @@ impl SurfaceThreadState {
     }
     
     fn on_vblank(&mut self, metadata: Option<DrmEventMetadata>) {
+        // info!("[VBLANK] received for {}", self.output.name());
         let Some(compositor) = self.compositor.as_mut() else {
             return;
         };
@@ -1019,6 +1026,17 @@ impl SurfaceThreadState {
     
     /// Perform a redraw with damage tracking using PostprocessState
     fn redraw(&mut self, _estimated_presentation: Duration) -> Result<()> {
+        // increment render counter and check if we should log frequency
+        self.render_count += 1;
+        let now = Instant::now();
+        if now.duration_since(self.last_freq_log) >= Duration::from_secs(1) {
+            let elapsed_secs = now.duration_since(self.last_freq_log).as_secs_f64();
+            let freq = self.render_count as f64 / elapsed_secs;
+            info!("[RENDER_FREQ] {} renders/sec for output {}", freq.round(), self.output.name());
+            self.render_count = 0;
+            self.last_freq_log = now;
+        }
+        
         // check we have a compositor first
         if self.compositor.is_none() {
             debug!("No compositor for {}, skipping redraw", self.output.name());
@@ -1455,6 +1473,7 @@ impl SurfaceThreadState {
     /// Handle estimated VBlank timer firing
     /// Sends frame callbacks and optionally triggers redraw
     fn on_estimated_vblank(&mut self, force: bool) {
+        // info!("[EST_VBLANK] timer fired for {}", self.output.name());
         let old_state = std::mem::replace(&mut self.state, QueueState::Idle);
         match old_state {
             QueueState::Idle => {

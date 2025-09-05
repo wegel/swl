@@ -14,15 +14,14 @@ use smithay::{
     delegate_viewporter, delegate_pointer_gestures, delegate_relative_pointer, delegate_text_input_manager,
     delegate_cursor_shape,
     desktop::{
-        Window, WindowSurfaceType, PopupKind, 
-        utils::send_frames_surface_tree, space::SpaceElement,
+        Window, WindowSurfaceType, PopupKind, space::SpaceElement,
         find_popup_root_surface, PopupKeyboardGrab, PopupPointerGrab, PopupUngrabStrategy,
     },
     output::Output,
     input::{Seat, pointer::Focus},
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
-    utils::{Clock, Monotonic, Size},
+    utils::Size,
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState, get_parent},
@@ -116,9 +115,8 @@ impl CompositorHandler for State {
                     keyboard.set_focus(self, Some(surface.clone()), serial);
                 }
                 
-                // send frame callback so the layer surface knows it can render again
-                let clock = Clock::<Monotonic>::new();
-                send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
+                // Don't send frame callbacks here - let the rendering pipeline handle it
+                // This prevents double callbacks and timing issues
                 
                 self.backend.schedule_render(output);
                 //tracing::debug!("Layer surface committed, scheduling render for output {}", output.name());
@@ -192,9 +190,8 @@ impl CompositorHandler for State {
                     keyboard.set_focus(self, Some(toplevel.wl_surface().clone()), serial);
                     //tracing::debug!("Set keyboard focus to new window");
                     
-                    // send initial frame callback
-                    let clock = Clock::<Monotonic>::new();
-                    send_frames_surface_tree(surface, &output, clock.now(), None, |_, _| None);
+                    // Don't send frame callbacks here - let the rendering pipeline handle it
+                    // The render scheduled below will trigger proper frame callbacks
                     
                     self.backend.schedule_render(&output);
                     mapped = true;
@@ -237,11 +234,8 @@ impl CompositorHandler for State {
                     let new_geom = window.geometry();
                     let changed = old_geom != new_geom;
                     
-                    // send frame callback to let client know it can render the next frame
-                    if let Some(ref output) = output {
-                        let clock = Clock::<Monotonic>::new();
-                        send_frames_surface_tree(surface, output, clock.now(), None, |_, _| None);
-                    }
+                    // Don't send frame callbacks here - they'll be sent by the rendering pipeline
+                    // after the scheduled render completes
                     
                     changed
                 } else {
@@ -265,6 +259,9 @@ impl CompositorHandler for State {
             
             // schedule render on the output showing this surface
             if let Some(output) = output {
+                // Always schedule renders for all commits
+                // This ensures Firefox and other applications that use subsurfaces render correctly
+                // Cosmic-comp also does this, resulting in ~60fps with Firefox, ~2fps with terminals
                 self.backend.schedule_render(&output);
             }
         }

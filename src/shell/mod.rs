@@ -807,6 +807,8 @@ impl Shell {
                 }
             }
         }
+                                    
+        tracing::debug!("render_elements called"); 
         
         // render windows from virtual outputs
         for vout in vouts {
@@ -831,8 +833,8 @@ impl Shell {
                                     let window_rect = Rectangle::from_size(fullscreen_window.geometry().size);
                                     let window_rect = GlobalRect::from_loc_and_size(location, window_rect.size);
                                     
-                                    tracing::debug!("Fullscreen render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
-                                        region.logical_rect, window_rect, region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()));
+                                    //tracing::debug!("Fullscreen render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
+                                    //    region.logical_rect, window_rect, region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()));
                                     if region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()) {
                                         // render only the fullscreen window
                                         // convert global coordinates to output-relative coordinates
@@ -860,8 +862,8 @@ impl Shell {
                                 let window_rect = Rectangle::from_size(window.geometry().size);
                                 let window_rect = GlobalRect::from_loc_and_size(location, window_rect.size);
                                 
-                                tracing::debug!("Render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
-                                    region.logical_rect, window_rect, region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()));
+                                //tracing::debug!("Render overlap check: region.logical_rect={:?} window_rect={:?} overlaps={}", 
+                                //    region.logical_rect, window_rect, region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()));
                                 if region.logical_rect.as_rectangle().overlaps(window_rect.as_rectangle()) {
                                     // render the window (existing window rendering code)
                                     // convert global coordinates to output-relative coordinates
@@ -873,8 +875,8 @@ impl Shell {
                                         output_scale,
                                         1.0,
                                     );
-                                    tracing::debug!("Window render_elements: global {:?} -> output-relative {:?} (physical {:?})", 
-                                        location, output_relative_location, output_relative_location.as_point().to_physical_precise_round::<_, i32>(output_scale));
+                                    //tracing::debug!("Window render_elements: global {:?} -> output-relative {:?} (physical {:?})", 
+                                    //    location, output_relative_location, output_relative_location.as_point().to_physical_precise_round::<_, i32>(output_scale));
                                     window_elements.extend(
                                         surface_elements.into_iter()
                                             .map(|elem| CosmicElement::Surface(elem))
@@ -897,7 +899,7 @@ impl Shell {
                         } // end of else block (not fullscreen)
                         
                         // Add window elements first (they will render behind borders in front-to-back order)
-                        tracing::debug!("Adding {} window elements to render list", window_elements.len());
+                        //tracing::debug!("Adding {} window elements to render list", window_elements.len());
                         elements.extend(window_elements);
                         
                         // Render tab bar if in tabbed mode
