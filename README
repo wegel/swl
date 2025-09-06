@@ -1,0 +1,75 @@
+swl
+===
+
+Wayland tiling compositor using Smithay.
+
+FEATURES
+--------
+- master/slave simple tiling
+- tabbed mode
+- configurable virtual outputs
+
+KEYBINDS
+--------
+mod = logo key
+
+mod+return      spawn terminal (hardcoded wezterm)
+mod+q           quit window
+mod+j/k         focus next/prev  
+mod+shift+j/k   move window in stack
+mod+h/l         resize master width
+mod+shift+l     increment master count
+mod+shift+h     decrement master count
+mod+space       toggle float
+mod+tab         toggle tabbed mode
+mod+1-9         switch workspace
+mod+shift+1-9   move window to workspace
+mod+f           fullscreen toggle
+mod+shift+e     quit compositor
+
+BUILDING
+--------
+cargo build --release
+
+RUNNING
+-------
+switch to tty, then:
+./target/release/swl
+
+DEPS
+----
+rust 1.85+, libinput, libgbm, libudev, libseat
+
+STARTUP
+-------
+Put your startup script at ~/.config/swl/run (make it executable)
+or set SWL_RUN=/path/to/script
+
+ENVIRONMENT
+-----------
+SWL_VIRTUAL_OUTPUTS     split monitors into regions, format: "DP-1:0,0,1920x1080;DP-1:1920,0,1920x1080"
+                        splits DP-1 into left/right halves, each gets own workspace
+SWL_KEYBOARD_LAYOUT     xkb layout (default: us)
+SWL_KEYBOARD_OPTIONS    xkb options (example: "ctrl:nocaps,compose:ralt")
+SWL_RUN                 path to startup script (default: ~/.config/swl/run)
+
+VIRTUAL OUTPUTS
+---------------
+Split your 4k monitor into 4 FHD workspaces:
+export SWL_VIRTUAL_OUTPUTS="DP-1:0,0,1920x1080;DP-1:1920,0,1920x1080;DP-1:0,1080,1920x1080;DP-1:1920,1080,1920x1080"
+
+Or just left/right split:
+export SWL_VIRTUAL_OUTPUTS="HDMI-A-1:0,0,1920x2160;HDMI-A-1:1920,0,1920x2160"
+
+Coordinates are physical pixels, pre-scaling, post-rotation.
+
+STATUS
+------
+I use it daily, but probably not production ready yet.
+
+TODO
+----
+- config file
+- mouse resize/move for floating windows 
+- output merging (span workspace across monitors)
+
