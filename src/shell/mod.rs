@@ -154,8 +154,12 @@ impl Shell {
         // check if this workspace is already active on a different virtual output
         if let Some(current_owner) = self.find_workspace_owner(workspace_id) {
             if current_owner != virtual_id {
-                tracing::debug!("Workspace '{}' is currently visible on {:?}, will hide from there and show on {:?}", 
-                    workspace_name, current_owner, virtual_id);
+                tracing::debug!(
+                    "Workspace '{}' is currently visible on {:?}, will hide from there and show on {:?}",
+                    workspace_name,
+                    current_owner,
+                    virtual_id
+                );
 
                 // find a different workspace for the current owner to switch to
                 let fallback_workspace =
@@ -628,8 +632,18 @@ impl Shell {
             }
         }
 
-        // 3. Windows
-        for window in self.space.elements() {
+        // 3. windows
+        // first check if we have a fullscreen window on this output
+        let fullscreen_window = self.get_fullscreen(output).cloned();
+
+        // if there's a fullscreen window, only check that window
+        let windows_to_check: Vec<_> = if let Some(fullscreen) = fullscreen_window {
+            vec![fullscreen]
+        } else {
+            self.space.elements().cloned().collect()
+        };
+
+        for window in &windows_to_check {
             // get the window's position in space
             let location = self
                 .space
@@ -647,8 +661,24 @@ impl Shell {
                 // but surface_under still needs coordinates accounting for CSD
                 let geom = window.geometry();
                 let global_geom = GlobalRect::from_loc_and_size(location, geom.size);
+
+                // check if we have a cached geometry offset for this window
+                let offset = if geom.loc.x == 0 && geom.loc.y == 0 {
+                    // look for cached offset in any workspace
+                    let mut cached_offset = None;
+                    for workspace in self.workspaces.values() {
+                        if let Some(offset) = workspace.cached_geometry_offsets.get(window) {
+                            cached_offset = Some(offset.to_f64());
+                            break;
+                        }
+                    }
+                    cached_offset.unwrap_or_else(|| geom.loc.to_f64())
+                } else {
+                    geom.loc.to_f64()
+                };
+
                 // surface_under needs the offset to account for hidden CSD
-                (global_geom, geom.loc.to_f64())
+                (global_geom, offset)
             } else {
                 // normal windows: use bbox for hit test (includes CSD)
                 let bbox = window.bbox();
@@ -679,8 +709,8 @@ impl Shell {
                     window.surface_under(window_relative, WindowSurfaceType::ALL)
                 {
                     // convert back to global coordinates (and to f64)
-                    // subtract the CSD offset we added earlier
-                    let global_loc = (loc + location).to_f64() - surface_under_offset;
+                    // no need to adjust for offset - loc is already in the right coordinate space
+                    let global_loc = (loc + location).to_f64();
                     trace!("Found surface at global location: {:?}", global_loc);
                     return Some((surface, global_loc));
                 } else {
@@ -745,9 +775,21 @@ impl Shell {
     pub fn set_fullscreen(&mut self, window: Window, fullscreen: bool, output: &Output) {
         if let Some(workspace) = self.workspace_containing_window_mut(&window) {
             if fullscreen {
+                // cache the current geometry offset before going fullscreen
+                let geom = window.geometry();
+                if geom.loc.x != 0 || geom.loc.y != 0 {
+                    workspace
+                        .cached_geometry_offsets
+                        .insert(window.clone(), geom.loc);
+                    tracing::debug!(
+                        "Cached geometry offset {:?} for fullscreen window",
+                        geom.loc
+                    );
+                }
                 workspace.fullscreen = Some(window);
             } else if workspace.fullscreen.as_ref() == Some(&window) {
                 workspace.fullscreen = None;
+                // don't clear the cached offset yet - we'll use it during arrangement
             }
             workspace.needs_arrange = true;
         }
@@ -778,7 +820,19 @@ impl Shell {
                             if is_fullscreen {
                                 // unfullscreen the window
                                 workspace.fullscreen = None;
+                                // don't clear the cached offset yet - we'll use it during arrangement
                             } else {
+                                // cache the current geometry offset before going fullscreen
+                                let geom = focused_window.geometry();
+                                if geom.loc.x != 0 || geom.loc.y != 0 {
+                                    workspace
+                                        .cached_geometry_offsets
+                                        .insert(focused_window.clone(), geom.loc);
+                                    tracing::debug!(
+                                        "Cached geometry offset {:?} for toggle fullscreen window",
+                                        geom.loc
+                                    );
+                                }
                                 // fullscreen the focused window
                                 workspace.fullscreen = Some(focused_window);
                             }
@@ -2058,7 +2112,30 @@ impl Shell {
                                 .insert(window.clone(), VirtualOutputRelativeRect::from(rect));
 
                             // position the window, accounting for CSD shadow offsets and virtual output global position
-                            let window_geom = window.geometry();
+                            let mut window_geom = window.geometry();
+
+                            // check if we have a cached offset for this window (e.g., after fullscreen)
+                            if (window_geom.loc.x == 0 && window_geom.loc.y == 0)
+                                && workspace.cached_geometry_offsets.contains_key(&window)
+                            {
+                                if let Some(cached_offset) =
+                                    workspace.cached_geometry_offsets.get(&window)
+                                {
+                                    window_geom.loc = *cached_offset;
+                                    tracing::debug!(
+                                        "Using cached geometry offset {:?} for window positioning",
+                                        cached_offset
+                                    );
+                                }
+                            } else if window_geom.loc.x != 0 || window_geom.loc.y != 0 {
+                                // window has restored its CSD, clear the cached offset
+                                if workspace.cached_geometry_offsets.remove(&window).is_some() {
+                                    tracing::debug!(
+                                        "Cleared cached geometry offset for window - CSD restored"
+                                    );
+                                }
+                            }
+
                             let vout_origin = logical_geometry.location();
                             let rect_origin =
                                 VirtualOutputRelativePoint::new(rect.loc.x, rect.loc.y);
@@ -2067,8 +2144,13 @@ impl Shell {
                                 window_global.as_point().x - window_geom.loc.x,
                                 window_global.as_point().y - window_geom.loc.y,
                             );
-                            tracing::debug!("Tiling: positioning window at global {:?} (vout offset {:?} + local {:?} - geom {:?})", 
-                                position, vout_origin.as_point(), rect.loc, window_geom.loc);
+                            tracing::debug!(
+                                "Tiling: positioning window at global {:?} (vout offset {:?} + local {:?} - geom {:?})",
+                                position,
+                                vout_origin.as_point(),
+                                rect.loc,
+                                window_geom.loc
+                            );
                             self.space
                                 .map_element(window.clone(), position.as_point(), false);
 
@@ -2089,6 +2171,9 @@ impl Shell {
                                     state.states.set(State::TiledRight);
                                     state.states.set(State::TiledTop);
                                     state.states.set(State::TiledBottom);
+
+                                    // ensure fullscreen state is cleared
+                                    state.states.unset(State::Fullscreen);
                                 });
 
                                 // send the configure event
@@ -2119,7 +2204,36 @@ impl Shell {
                                 .insert(active_window.clone(), window_rect);
 
                             // map the active window, accounting for CSD shadow offsets and virtual output global position
-                            let window_geom = active_window.geometry();
+                            let mut window_geom = active_window.geometry();
+
+                            // check if we have a cached offset for this window (e.g., after fullscreen)
+                            if (window_geom.loc.x == 0 && window_geom.loc.y == 0)
+                                && workspace
+                                    .cached_geometry_offsets
+                                    .contains_key(active_window)
+                            {
+                                if let Some(cached_offset) =
+                                    workspace.cached_geometry_offsets.get(active_window)
+                                {
+                                    window_geom.loc = *cached_offset;
+                                    tracing::debug!(
+                                        "Using cached geometry offset {:?} for tabbed window positioning",
+                                        cached_offset
+                                    );
+                                }
+                            } else if window_geom.loc.x != 0 || window_geom.loc.y != 0 {
+                                // window has restored its CSD, clear the cached offset
+                                if workspace
+                                    .cached_geometry_offsets
+                                    .remove(active_window)
+                                    .is_some()
+                                {
+                                    tracing::debug!(
+                                        "Cleared cached geometry offset for tabbed window - CSD restored"
+                                    );
+                                }
+                            }
+
                             let vout_origin = logical_geometry.location();
                             let window_global = window_rect.location().to_global(vout_origin);
                             let position = GlobalPoint::new(
@@ -2149,6 +2263,9 @@ impl Shell {
                                     state.states.set(State::TiledRight);
                                     state.states.set(State::TiledTop);
                                     state.states.set(State::TiledBottom);
+
+                                    // ensure fullscreen state is cleared
+                                    state.states.unset(State::Fullscreen);
                                 });
 
                                 // send the configure event

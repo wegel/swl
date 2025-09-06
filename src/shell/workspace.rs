@@ -60,6 +60,9 @@ pub struct Workspace {
     /// Cached window rectangles from last tiling arrangement
     pub window_rectangles: HashMap<Window, VirtualOutputRelativeRect>,
 
+    /// cached window geometry offsets (for CSD) when going fullscreen
+    pub cached_geometry_offsets: HashMap<Window, Point<i32, smithay::utils::Logical>>,
+
     /// Cached available area (non-exclusive zone) from last arrangement
     pub available_area: VirtualOutputRelativeRect,
 
@@ -88,6 +91,7 @@ impl Workspace {
             floating_windows: HashSet::new(),
             needs_arrange: false,
             window_rectangles: HashMap::new(),
+            cached_geometry_offsets: HashMap::new(),
             available_area: VirtualOutputRelativeRect::from(Rectangle::new(
                 Point::from((0, 0)),      // virtual output relative origin
                 Size::from((1920, 1080)), // default size
@@ -147,6 +151,9 @@ impl Workspace {
 
         // Remove from cached rectangles
         self.window_rectangles.remove(window);
+
+        // remove from cached geometry offsets
+        self.cached_geometry_offsets.remove(window);
 
         // Clear fullscreen if it was this window
         if self.fullscreen.as_ref() == Some(window) {
