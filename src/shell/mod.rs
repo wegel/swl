@@ -535,24 +535,43 @@ impl Shell {
         for window in self.space.elements() {
             // get the window's position in space  
             let location = self.space.element_location_typed(window).unwrap_or_default();
-            // get the window's bounding box (includes decorations)
-            let bbox = window.bbox();
-            // translate bbox to global coordinates
-            let bbox_global_origin = GlobalPoint::new(
-                location.as_point().x + bbox.loc.x,
-                location.as_point().y + bbox.loc.y,
-            );
-            let global_bbox = GlobalRect::from_loc_and_size(
-                bbox_global_origin,
-                bbox.size,
-            );
             
-            trace!("Window bbox: {:?}", global_bbox);
-            if global_bbox.to_f64().contains(point) {
+            // check if this window is fullscreen
+            let is_fullscreen = window.toplevel()
+                .map(|t| t.current_state().states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen))
+                .unwrap_or(false);
+            
+            // for fullscreen windows, we need to account for CSD offset
+            let (hit_test_rect, surface_under_offset) = if is_fullscreen {
+                // fullscreen windows: use geometry for hit test (no visible CSD)
+                // but surface_under still needs coordinates accounting for CSD
+                let geom = window.geometry();
+                let global_geom = GlobalRect::from_loc_and_size(
+                    location,
+                    geom.size,
+                );
+                // surface_under needs the offset to account for hidden CSD
+                (global_geom, geom.loc.to_f64())
+            } else {
+                // normal windows: use bbox for hit test (includes CSD)
+                let bbox = window.bbox();
+                let bbox_global_origin = GlobalPoint::new(
+                    location.as_point().x + bbox.loc.x,
+                    location.as_point().y + bbox.loc.y,
+                );
+                let global_bbox = GlobalRect::from_loc_and_size(
+                    bbox_global_origin,
+                    bbox.size,
+                );
+                (global_bbox, Point::<f64, Logical>::from((0.0, 0.0)))
+            };
+            
+            trace!("Window hit test rect (fullscreen={}): {:?}", is_fullscreen, hit_test_rect);
+            if hit_test_rect.to_f64().contains(point) {
                 // convert point to window-relative coordinates
-                // window.surface_under expects coordinates relative to the window's origin (0,0)
-                let window_relative = point - location.to_f64();
-                trace!("Window-relative point: {:?}", window_relative);
+                // for fullscreen, adjust for the CSD offset
+                let window_relative = point - location.to_f64() + surface_under_offset;
+                trace!("Window-relative point (adjusted for CSD): {:?}", window_relative);
                 
                 // check for surface under this point (including decorations)
                 if let Some((surface, loc)) = window.surface_under(
@@ -560,7 +579,8 @@ impl Shell {
                     WindowSurfaceType::ALL,
                 ) {
                     // convert back to global coordinates (and to f64)
-                    let global_loc = (loc + location).to_f64();
+                    // subtract the CSD offset we added earlier
+                    let global_loc = (loc + location).to_f64() - surface_under_offset;
                     trace!("Found surface at global location: {:?}", global_loc);
                     return Some((surface, global_loc));
                 } else {
