@@ -3,14 +3,16 @@
 pub mod cursor;
 pub mod element;
 
-use smithay::{
-    backend::{
-        allocator::{dmabuf::{Dmabuf, AnyError, DmabufAllocator}, gbm::GbmAllocator, Allocator},
-        drm::DrmNode,
-        renderer::{
-            glow::GlowRenderer,
-            multigpu::{ApiDevice, GraphicsApi},
-        },
+use smithay::backend::{
+    allocator::{
+        dmabuf::{AnyError, Dmabuf, DmabufAllocator},
+        gbm::GbmAllocator,
+        Allocator,
+    },
+    drm::DrmNode,
+    renderer::{
+        glow::GlowRenderer,
+        multigpu::{ApiDevice, GraphicsApi},
     },
 };
 use std::{
@@ -77,7 +79,6 @@ pub enum GbmGlowError {
     #[error("Rendering error: {0}")]
     Render(#[from] smithay::backend::renderer::gles::GlesError),
 }
-
 
 impl<A: AsFd + Clone + 'static> GraphicsApi for GbmGlowBackend<A> {
     type Device = GbmGlowDevice;
@@ -160,13 +161,11 @@ impl ApiDevice for GbmGlowDevice {
 
 use smithay::backend::{
     drm::DrmDeviceFd,
-    renderer::{
-        multigpu::{MultiFrame, MultiRenderer, Error as MultiError},
-    },
+    renderer::multigpu::{Error as MultiError, MultiFrame, MultiRenderer},
 };
 
 /// Type aliases for multi-GPU rendering
-pub type GlMultiRenderer<'a> = 
+pub type GlMultiRenderer<'a> =
     MultiRenderer<'a, 'a, GbmGlowBackend<DrmDeviceFd>, GbmGlowBackend<DrmDeviceFd>>;
 #[allow(dead_code)] // will be used for multi-GPU rendering
 pub type GlMultiFrame<'a, 'frame, 'buffer> =
@@ -185,4 +184,5 @@ pub fn init_shaders(renderer: &mut GlowRenderer) -> Result<(), anyhow::Error> {
 
 /// Clear color for empty frames
 #[allow(dead_code)] // will be used in Phase 2g for clearing frames
-pub const CLEAR_COLOR: smithay::backend::renderer::Color32F = smithay::backend::renderer::Color32F::new(0.3, 0.0, 0.2, 1.0); // dark pink
+pub const CLEAR_COLOR: smithay::backend::renderer::Color32F =
+    smithay::backend::renderer::Color32F::new(0.3, 0.0, 0.2, 1.0); // dark pink

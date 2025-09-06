@@ -3,14 +3,12 @@
 use smithay::{
     backend::renderer::{
         element::{
-            surface::WaylandSurfaceRenderElement,
-            texture::TextureRenderElement,
-            solid::SolidColorRenderElement,
-            utils::RelocateRenderElement,
-            Element, Id, Kind, RenderElement, UnderlyingStorage,
+            solid::SolidColorRenderElement, surface::WaylandSurfaceRenderElement,
+            texture::TextureRenderElement, utils::RelocateRenderElement, Element, Id, Kind,
+            RenderElement, UnderlyingStorage,
         },
         gles::{GlesError, GlesTexture},
-        glow::{GlowRenderer, GlowFrame},
+        glow::{GlowFrame, GlowRenderer},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
         ImportAll, ImportMem, Renderer,
     },
@@ -57,17 +55,17 @@ impl AsGlowRenderer for GlowRenderer {
     fn glow_renderer(&self) -> &GlowRenderer {
         self
     }
-    
+
     fn glow_renderer_mut(&mut self) -> &mut GlowRenderer {
         self
     }
-    
+
     fn glow_frame<'a, 'frame, 'buffer>(
         frame: &'a Self::Frame<'frame, 'buffer>,
     ) -> &'a GlowFrame<'frame, 'buffer> {
         frame
     }
-    
+
     fn glow_frame_mut<'a, 'frame, 'buffer>(
         frame: &'a mut Self::Frame<'frame, 'buffer>,
     ) -> &'a mut GlowFrame<'frame, 'buffer> {
@@ -79,17 +77,17 @@ impl<'a> AsGlowRenderer for GlMultiRenderer<'a> {
     fn glow_renderer(&self) -> &GlowRenderer {
         self.as_ref()
     }
-    
+
     fn glow_renderer_mut(&mut self) -> &mut GlowRenderer {
         self.as_mut()
     }
-    
+
     fn glow_frame<'b, 'frame, 'buffer>(
         frame: &'b Self::Frame<'frame, 'buffer>,
     ) -> &'b GlowFrame<'frame, 'buffer> {
         frame.as_ref()
     }
-    
+
     fn glow_frame_mut<'b, 'frame, 'buffer>(
         frame: &'b mut Self::Frame<'frame, 'buffer>,
     ) -> &'b mut GlowFrame<'frame, 'buffer> {
@@ -142,18 +140,22 @@ impl Element for DamageElement {
         smithay::utils::Transform::Normal
     }
 
-    fn damage_since(&self, _scale: Scale<f64>, _commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        _scale: Scale<f64>,
+        _commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         DamageSet::from_slice(&[self.geometry])
     }
 
     fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         OpaqueRegions::from_slice(&[])
     }
-    
+
     fn alpha(&self) -> f32 {
         1.0
     }
-    
+
     fn kind(&self) -> Kind {
         Kind::Unspecified
     }
@@ -260,7 +262,11 @@ where
         }
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         match self {
             SwlElement::Surface(elem) => elem.damage_since(scale, commit),
             SwlElement::Damage(elem) => elem.damage_since(scale, commit),
@@ -317,31 +323,44 @@ where
     ) -> Result<(), R::Error> {
         match self {
             SwlElement::Surface(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
-            SwlElement::Damage(elem) => <DamageElement as RenderElement<R>>::draw(elem, frame, src, dst, damage, opaque_regions),
-            SwlElement::Texture(elem) => <TextureRenderElement<GlesTexture> as RenderElement<GlowRenderer>>::draw(
+            SwlElement::Damage(elem) => <DamageElement as RenderElement<R>>::draw(
                 elem,
-                R::glow_frame_mut(frame),
+                frame,
                 src,
                 dst,
                 damage,
                 opaque_regions,
-            ).map_err(R::Error::from_gles_error),
+            ),
+            SwlElement::Texture(elem) => {
+                <TextureRenderElement<GlesTexture> as RenderElement<GlowRenderer>>::draw(
+                    elem,
+                    R::glow_frame_mut(frame),
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                )
+                .map_err(R::Error::from_gles_error)
+            }
             SwlElement::Cursor(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
-            SwlElement::SolidColor(elem) => <SolidColorRenderElement as RenderElement<GlowRenderer>>::draw(
-                elem,
-                R::glow_frame_mut(frame),
-                src,
-                dst,
-                damage,
-                opaque_regions,
-            ).map_err(R::Error::from_gles_error),
+            SwlElement::SolidColor(elem) => {
+                <SolidColorRenderElement as RenderElement<GlowRenderer>>::draw(
+                    elem,
+                    R::glow_frame_mut(frame),
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                )
+                .map_err(R::Error::from_gles_error)
+            }
         }
     }
-    
+
     fn underlying_storage(&self, renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         match self {
             SwlElement::Surface(elem) => elem.underlying_storage(renderer),
-            SwlElement::Damage(_) => None,  // DamageElement has no underlying storage
+            SwlElement::Damage(_) => None, // DamageElement has no underlying storage
             SwlElement::Texture(_) => None, // TextureRenderElement doesn't provide underlying storage for external renderers
             SwlElement::Cursor(elem) => elem.underlying_storage(renderer),
             SwlElement::SolidColor(_) => None, // SolidColorRenderElement has no underlying storage

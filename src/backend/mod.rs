@@ -5,10 +5,7 @@ pub mod render;
 
 use crate::state::State;
 use anyhow::Result;
-use smithay::reexports::{
-    calloop::EventLoop,
-    wayland_server::DisplayHandle,
-};
+use smithay::reexports::{calloop::EventLoop, wayland_server::DisplayHandle};
 
 /// Initialize the backend based on environment
 pub fn init_backend(

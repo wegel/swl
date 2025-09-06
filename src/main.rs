@@ -34,12 +34,11 @@ fn main_inner() -> Result<()> {
     tracing::debug!("Debug logging is working!");
 
     // init event loop
-    let mut event_loop = EventLoop::try_new()
-        .context("Failed to initialize event loop")?;
-    
+    let mut event_loop = EventLoop::try_new().context("Failed to initialize event loop")?;
+
     // init wayland display
     let (display_handle, socket) = init_wayland_display(&mut event_loop)?;
-    
+
     // init state
     let mut state = State::new(
         display_handle.clone(),
@@ -47,7 +46,7 @@ fn main_inner() -> Result<()> {
         event_loop.handle(),
         event_loop.get_signal(),
     );
-    
+
     // init backend
     backend::init_backend(&display_handle, &mut event_loop, &mut state)?;
 
@@ -58,7 +57,7 @@ fn main_inner() -> Result<()> {
     startup::run_startup_program();
 
     info!("Starting event loop");
-    
+
     // run the event loop
     event_loop.run(None, &mut state, |state| {
         // shall we shut down?
@@ -71,7 +70,7 @@ fn main_inner() -> Result<()> {
 
         // send out pending events
         let _ = state.display_handle.flush_clients();
-        
+
         // refresh focus if needed (deferred from layer_destroyed and other events)
         if state.needs_focus_refresh {
             state.needs_focus_refresh = false;
@@ -85,14 +84,11 @@ fn main_inner() -> Result<()> {
 
 fn init_logger() -> Result<()> {
     use tracing_subscriber::{fmt, EnvFilter};
-    
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("swl=info"));
-    
-    fmt()
-        .with_env_filter(filter)
-        .init();
-        
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("swl=info"));
+
+    fmt().with_env_filter(filter).init();
+
     Ok(())
 }
 
@@ -100,31 +96,28 @@ fn init_wayland_display(
     event_loop: &mut EventLoop<'static, State>,
 ) -> Result<(DisplayHandle, String)> {
     // create the wayland display
-    let display = Display::<State>::new()
-        .context("Failed to create wayland display")?;
+    let display = Display::<State>::new().context("Failed to create wayland display")?;
     let display_handle = display.handle();
-    
+
     // create a listening socket
-    let listening_socket = ListeningSocketSource::new_auto()
-        .context("Failed to create listening socket")?;
-    
+    let listening_socket =
+        ListeningSocketSource::new_auto().context("Failed to create listening socket")?;
+
     let socket_name = listening_socket
         .socket_name()
         .to_string_lossy()
         .into_owned();
-    
+
     info!("Listening on wayland socket: {}", socket_name);
-    
+
     event_loop
         .handle()
         .insert_source(listening_socket, |client_stream, _, state| {
             // accept new wayland clients
-            match state
-                .display_handle
-                .insert_client(
-                    client_stream, 
-                    std::sync::Arc::new(crate::wayland::handlers::ClientState::new())
-                ) {
+            match state.display_handle.insert_client(
+                client_stream,
+                std::sync::Arc::new(crate::wayland::handlers::ClientState::new()),
+            ) {
                 Ok(client) => {
                     tracing::trace!("New Wayland client connected: {:?}", client.id());
                 }
@@ -134,7 +127,7 @@ fn init_wayland_display(
             }
         })
         .context("Failed to init wayland socket source")?;
-    
+
     // insert the display as an event source
     event_loop
         .handle()
@@ -151,9 +144,9 @@ fn init_wayland_display(
                         Ok(PostAction::Continue)
                     }
                 }
-            }
+            },
         )
         .context("Failed to init display event source")?;
-    
+
     Ok((display_handle, socket_name))
 }

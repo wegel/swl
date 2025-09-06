@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Type-safe coordinate system wrappers to prevent coordinate space confusion.
-//! 
+//!
 //! We have several coordinate spaces in the compositor:
 //! - Global: smithay's global coordinate space across all outputs
 //! - OutputRelative: coordinates relative to a specific physical output (0,0 at output's top-left)
 //! - VirtualOutputRelative: coordinates relative to a virtual output's logical rectangle
-//! 
+//!
 //! Using wrapper types prevents accidentally passing the wrong coordinate space to functions.
 
-use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::desktop::space::SpaceElement;
+use smithay::utils::{Logical, Point, Rectangle, Size};
 use std::ops::{Add, Sub};
 
 /// A point in smithay's global coordinate space
@@ -45,17 +45,17 @@ impl GlobalPoint {
     pub fn new(x: i32, y: i32) -> Self {
         Self(Point::new(x, y))
     }
-    
+
     /// Convert global coordinates to output-relative coordinates
     pub fn to_output_relative(self, output_position: GlobalPoint) -> OutputRelativePoint {
         OutputRelativePoint(self.0 - output_position.0)
     }
-    
+
     /// Access the underlying Point
     pub fn as_point(&self) -> Point<i32, Logical> {
         self.0
     }
-    
+
     /// Convert to f64 coordinates for calculations
     pub fn to_f64(&self) -> smithay::utils::Point<f64, Logical> {
         self.0.to_f64()
@@ -66,17 +66,17 @@ impl OutputRelativePoint {
     pub fn new(x: i32, y: i32) -> Self {
         Self(Point::new(x, y))
     }
-    
+
     /// Convert output-relative coordinates to global coordinates
     pub fn to_global(self, output_position: GlobalPoint) -> GlobalPoint {
         GlobalPoint(self.0 + output_position.0)
     }
-    
+
     /// Offset by a delta
     pub fn offset_by(self, dx: i32, dy: i32) -> Self {
         Self(Point::new(self.0.x + dx, self.0.y + dy))
     }
-    
+
     /// Access the underlying Point
     pub fn as_point(&self) -> Point<i32, Logical> {
         self.0
@@ -87,19 +87,23 @@ impl VirtualOutputRelativePoint {
     pub fn new(x: i32, y: i32) -> Self {
         Self(Point::new(x, y))
     }
-    
+
     /// Convert virtual-output-relative coordinates to global coordinates
     pub fn to_global(self, vout_global_position: GlobalPoint) -> GlobalPoint {
         GlobalPoint(self.0 + vout_global_position.0)
     }
-    
+
     /// Convert virtual-output-relative coordinates to output-relative coordinates
     #[allow(dead_code)]
-    pub fn to_output_relative(self, vout_global_position: GlobalPoint, output_position: GlobalPoint) -> OutputRelativePoint {
+    pub fn to_output_relative(
+        self,
+        vout_global_position: GlobalPoint,
+        output_position: GlobalPoint,
+    ) -> OutputRelativePoint {
         let global = self.to_global(vout_global_position);
         global.to_output_relative(output_position)
     }
-    
+
     /// Access the underlying Point
     pub fn as_point(&self) -> Point<i32, Logical> {
         self.0
@@ -111,12 +115,12 @@ impl GlobalPointF64 {
     pub fn new(x: f64, y: f64) -> Self {
         Self(Point::from((x, y)))
     }
-    
+
     /// Access the underlying Point
     pub fn as_point(&self) -> Point<f64, Logical> {
         self.0
     }
-    
+
     /// Convert from window center (common case for cursor positioning)
     pub fn from_center(rect: Rectangle<i32, Logical>) -> Self {
         Self::new(
@@ -124,7 +128,7 @@ impl GlobalPointF64 {
             rect.loc.y as f64 + rect.size.h as f64 / 2.0,
         )
     }
-    
+
     /// Convert from global rectangle center
     #[allow(dead_code)]
     pub fn from_global_rect_center(rect: &GlobalRect) -> Self {
@@ -142,29 +146,29 @@ impl GlobalRect {
     pub fn new(loc: GlobalPoint, size: Size<i32, Logical>) -> Self {
         Self(Rectangle::new(loc.0, size))
     }
-    
+
     /// Create from location and size
     pub fn from_loc_and_size(loc: GlobalPoint, size: Size<i32, Logical>) -> Self {
         Self::new(loc, size)
     }
-    
+
     pub fn location(&self) -> GlobalPoint {
         GlobalPoint(self.0.loc)
     }
-    
+
     pub fn size(&self) -> Size<i32, Logical> {
         self.0.size
     }
-    
+
     pub fn as_rectangle(&self) -> Rectangle<i32, Logical> {
         self.0
     }
-    
+
     /// Convert to f64 coordinates for calculations
     pub fn to_f64(&self) -> smithay::utils::Rectangle<f64, Logical> {
         self.0.to_f64()
     }
-    
+
     /// Check if this rectangle contains a point
     pub fn contains(&self, point: impl Into<Point<i32, Logical>>) -> bool {
         self.0.contains(point)
@@ -176,17 +180,17 @@ impl OutputRelativeRect {
     pub fn new(loc: OutputRelativePoint, size: Size<i32, Logical>) -> Self {
         Self(Rectangle::new(loc.0, size))
     }
-    
+
     #[allow(dead_code)]
     pub fn location(&self) -> OutputRelativePoint {
         OutputRelativePoint(self.0.loc)
     }
-    
+
     #[allow(dead_code)]
     pub fn size(&self) -> Size<i32, Logical> {
         self.0.size
     }
-    
+
     #[allow(dead_code)]
     pub fn as_rectangle(&self) -> Rectangle<i32, Logical> {
         self.0
@@ -197,12 +201,12 @@ impl VirtualOutputRelativeRect {
     pub fn new(loc: VirtualOutputRelativePoint, size: Size<i32, Logical>) -> Self {
         Self(Rectangle::new(loc.0, size))
     }
-    
+
     /// Create from location and size
     pub fn from_loc_and_size(loc: VirtualOutputRelativePoint, size: Size<i32, Logical>) -> Self {
         Self::new(loc, size)
     }
-    
+
     /// Create with a y offset (useful for tab bars)
     pub fn with_y_offset(area: &Self, y_offset: i32) -> Self {
         Self(Rectangle::new(
@@ -210,15 +214,15 @@ impl VirtualOutputRelativeRect {
             Size::new(area.0.size.w, area.0.size.h - y_offset),
         ))
     }
-    
+
     pub fn location(&self) -> VirtualOutputRelativePoint {
         VirtualOutputRelativePoint(self.0.loc)
     }
-    
+
     pub fn size(&self) -> Size<i32, Logical> {
         self.0.size
     }
-    
+
     pub fn as_rectangle(&self) -> Rectangle<i32, Logical> {
         self.0
     }
@@ -227,7 +231,7 @@ impl VirtualOutputRelativeRect {
 // arithmetic operations
 impl Add<Point<i32, Logical>> for VirtualOutputRelativePoint {
     type Output = Self;
-    
+
     fn add(self, rhs: Point<i32, Logical>) -> Self::Output {
         Self(self.0 + rhs)
     }
@@ -235,7 +239,7 @@ impl Add<Point<i32, Logical>> for VirtualOutputRelativePoint {
 
 impl Sub<Point<i32, Logical>> for VirtualOutputRelativePoint {
     type Output = Self;
-    
+
     fn sub(self, rhs: Point<i32, Logical>) -> Self::Output {
         Self(self.0 - rhs)
     }
@@ -243,7 +247,7 @@ impl Sub<Point<i32, Logical>> for VirtualOutputRelativePoint {
 
 impl Add<GlobalPoint> for Point<i32, Logical> {
     type Output = GlobalPoint;
-    
+
     fn add(self, rhs: GlobalPoint) -> Self::Output {
         GlobalPoint(self + rhs.0)
     }
@@ -260,13 +264,13 @@ impl OutputExt for smithay::output::Output {
     }
 }
 
-// helper trait for easy conversion from smithay Space methods  
+// helper trait for easy conversion from smithay Space methods
 pub trait SpaceExt<W> {
     fn element_location_typed(&self, element: &W) -> Option<GlobalPoint>;
 }
 
-impl<W> SpaceExt<W> for smithay::desktop::Space<W> 
-where 
+impl<W> SpaceExt<W> for smithay::desktop::Space<W>
+where
     W: SpaceElement + PartialEq,
 {
     fn element_location_typed(&self, element: &W) -> Option<GlobalPoint> {

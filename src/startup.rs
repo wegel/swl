@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::{
-    env,
-    fs,
+    env, fs,
     path::PathBuf,
     process::{Command, Stdio},
 };
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Find and execute the startup program
-/// 
+///
 /// Checks in order:
 /// 1. SWL_RUN environment variable (path to executable)
 /// 2. $XDG_CONFIG_HOME/swl/run
@@ -21,7 +20,7 @@ pub fn run_startup_program() {
         execute_program(&program);
         return;
     }
-    
+
     // then check config directories
     let config_path = find_config_program();
     if let Some(path) = config_path {
@@ -40,7 +39,7 @@ fn find_config_program() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    
+
     // fall back to $HOME/.config/swl/run
     if let Ok(home) = env::var("HOME") {
         let path = PathBuf::from(home).join(".config/swl/run");
@@ -48,7 +47,7 @@ fn find_config_program() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    
+
     None
 }
 
@@ -56,10 +55,13 @@ fn execute_program(program_path: &str) {
     // check if the program is executable
     let path = PathBuf::from(program_path);
     if path.exists() && !is_executable(&path) {
-        warn!("Startup program {} exists but is not executable", program_path);
+        warn!(
+            "Startup program {} exists but is not executable",
+            program_path
+        );
         return;
     }
-    
+
     // fork and execute the program in a thread that will wait for it
     // the program will inherit all environment variables including WAYLAND_DISPLAY
     let program_path = program_path.to_string();
@@ -75,7 +77,10 @@ fn execute_program(program_path: &str) {
                 match child.wait() {
                     Ok(status) => {
                         if !status.success() {
-                            warn!("Startup program {} exited with status: {}", program_path, status);
+                            warn!(
+                                "Startup program {} exited with status: {}",
+                                program_path, status
+                            );
                         }
                     }
                     Err(e) => {
@@ -93,7 +98,7 @@ fn execute_program(program_path: &str) {
 #[cfg(unix)]
 fn is_executable(path: &PathBuf) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    
+
     match fs::metadata(path) {
         Ok(metadata) => {
             let permissions = metadata.permissions();

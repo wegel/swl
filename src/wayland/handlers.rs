@@ -3,8 +3,7 @@
 pub mod dmabuf;
 
 use smithay::{
-    reexports::wayland_server::backend::ClientData,
-    wayland::compositor::CompositorClientState,
+    reexports::wayland_server::backend::ClientData, wayland::compositor::CompositorClientState,
 };
 
 /// Client data stored for each connected client
@@ -14,7 +13,12 @@ pub struct ClientState {
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: smithay::reexports::wayland_server::backend::ClientId) {}
-    fn disconnected(&self, _client_id: smithay::reexports::wayland_server::backend::ClientId, _reason: smithay::reexports::wayland_server::backend::DisconnectReason) {}
+    fn disconnected(
+        &self,
+        _client_id: smithay::reexports::wayland_server::backend::ClientId,
+        _reason: smithay::reexports::wayland_server::backend::DisconnectReason,
+    ) {
+    }
 }
 
 impl ClientState {

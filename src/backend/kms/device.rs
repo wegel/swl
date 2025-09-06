@@ -8,15 +8,12 @@ use smithay::{
             Fourcc,
         },
         drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode,
             exporter::gbm::GbmFramebufferExporter,
             output::{DrmOutputManager, LockedDrmOutputManager},
+            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode,
         },
-        egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority},
-        renderer::{
-            glow::GlowRenderer,
-            multigpu::GpuManager,
-        },
+        egl::{context::ContextPriority, EGLContext, EGLDevice, EGLDisplay},
+        renderer::{glow::GlowRenderer, multigpu::GpuManager},
         session::Session,
     },
     desktop::utils::OutputPresentationFeedback,
@@ -38,7 +35,7 @@ use std::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::backend::render::{GlMultiRenderer, element::SwlElement};
+use crate::backend::render::{element::SwlElement, GlMultiRenderer};
 
 /// EGL context and display for rendering
 #[derive(Debug)]
@@ -68,7 +65,7 @@ pub type LockedGbmDrmOutputManager<'a> = LockedDrmOutputManager<
 
 /// A DRM device with rendering capabilities
 pub struct Device {
-    pub drm: GbmDrmOutputManager,  // now using DrmOutputManager
+    pub drm: GbmDrmOutputManager, // now using DrmOutputManager
     pub drm_node: DrmNode,
     pub gbm: GbmDevice<DrmDeviceFd>,
     pub allocator: Option<GbmAllocator<DrmDeviceFd>>,
@@ -78,10 +75,10 @@ pub struct Device {
     pub supports_atomic: bool,
     pub event_token: Option<RegistrationToken>,
     pub primary_node: Arc<RwLock<Option<DrmNode>>>,
-    
+
     // track outputs and surfaces
     pub outputs: HashMap<connector::Handle, Output>,
-    pub surfaces: HashMap<crtc::Handle, connector::Handle>,  // maps CRTC to connector
+    pub surfaces: HashMap<crtc::Handle, connector::Handle>, // maps CRTC to connector
     pub surface_manager: super::surface::SurfaceManager,
 }
 
@@ -101,13 +98,13 @@ impl fmt::Debug for Device {
 pub fn init_egl(gbm: &GbmDevice<DrmDeviceFd>) -> Result<EGLInternals> {
     let display = unsafe { EGLDisplay::new(gbm.clone()) }
         .context("Failed to create EGLDisplay for device")?;
-    
-    let device = EGLDevice::device_for_display(&display)
-        .context("Unable to find matching egl device")?;
-    
+
+    let device =
+        EGLDevice::device_for_display(&display).context("Unable to find matching egl device")?;
+
     let context = EGLContext::new_with_priority(&display, ContextPriority::High)
         .context("Failed to create EGLContext for device")?;
-    
+
     Ok(EGLInternals {
         display,
         device,
@@ -123,15 +120,23 @@ impl Device {
             surface.schedule_render();
         }
     }
-    
+
     /// Scan for connected outputs and create them
-    pub fn scan_outputs(&mut self, display_handle: &DisplayHandle, event_loop: &LoopHandle<'static, crate::state::State>, gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>, shell: Arc<std::sync::RwLock<crate::shell::Shell>>, seat: smithay::input::Seat<crate::State>) -> Result<Vec<Output>> {
+    pub fn scan_outputs(
+        &mut self,
+        display_handle: &DisplayHandle,
+        event_loop: &LoopHandle<'static, crate::state::State>,
+        gpu_manager: &mut GpuManager<crate::backend::render::GbmGlowBackend<DrmDeviceFd>>,
+        shell: Arc<std::sync::RwLock<crate::shell::Shell>>,
+        seat: smithay::input::Seat<crate::State>,
+    ) -> Result<Vec<Output>> {
         use smithay::reexports::drm::control::Device as ControlDevice;
-        
-        // get display configuration (connector -> CRTC mapping)  
+
+        // get display configuration (connector -> CRTC mapping)
         // we need to access the underlying DrmDevice
-        let display_config = super::drm_helpers::display_configuration(self.drm.device_mut(), self.supports_atomic)?;
-        
+        let display_config =
+            super::drm_helpers::display_configuration(self.drm.device_mut(), self.supports_atomic)?;
+
         for (conn, maybe_crtc) in display_config {
             let conn_info = match self.drm.device().get_connector(conn, false) {
                 Ok(info) => info,
@@ -140,34 +145,35 @@ impl Device {
                     continue;
                 }
             };
-            
+
             if conn_info.state() == connector::State::Connected {
                 let Some(crtc) = maybe_crtc else {
                     warn!("No CRTC available for connector {:?}", conn);
                     continue;
                 };
-                
+
                 match create_output_for_conn(self.drm.device_mut(), conn, display_handle) {
                     Ok(output) => {
                         if let Err(err) = populate_modes(self.drm.device_mut(), &output, conn) {
                             warn!(?err, ?conn, "Failed to populate modes");
                             continue;
                         }
-                        
+
                         let output_name = output.name();
-                        info!("Detected output: {} ({}x{} @ {}Hz) on CRTC {:?}", 
+                        info!(
+                            "Detected output: {} ({}x{} @ {}Hz) on CRTC {:?}",
                             output_name,
                             output.current_mode().map(|m| m.size.w).unwrap_or(0),
                             output.current_mode().map(|m| m.size.h).unwrap_or(0),
                             output.current_mode().map(|m| m.refresh).unwrap_or(0),
                             crtc,
                         );
-                        
+
                         // create surface for the output
                         if let Err(err) = self.surface_manager.create_surface(
-                            output.clone(), 
-                            crtc, 
-                            conn, 
+                            output.clone(),
+                            crtc,
+                            conn,
                             self.primary_node.clone(),
                             self.render_node,
                             event_loop,
@@ -177,13 +183,15 @@ impl Device {
                             warn!(?err, "Failed to create surface for output");
                             continue;
                         }
-                        
+
                         // notify the new surface about the GPU node before resuming
                         // this ensures PostprocessState can be created
-                        if let (Some(surface), Some(egl_context)) = (self.surface_manager.get(&crtc), self.egl.as_ref()) {
-                            use smithay::backend::egl::{context::ContextPriority, EGLContext};
+                        if let (Some(surface), Some(egl_context)) =
+                            (self.surface_manager.get(&crtc), self.egl.as_ref())
+                        {
                             use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags};
-                            
+                            use smithay::backend::egl::{context::ContextPriority, EGLContext};
+
                             let shared_ctx = EGLContext::new_shared_with_priority(
                                 &egl_context.display,
                                 &egl_context.context,
@@ -195,31 +203,31 @@ impl Device {
                             );
                             surface.add_node(self.render_node, allocator, shared_ctx);
                         }
-                        
+
                         // create DRM compositor for the output
                         // we need to get the DRM mode, not the output mode
                         let drm_mode = conn_info.modes()[0]; // use first available mode
-                        
+
                         // get renderer from GPU manager
                         match gpu_manager.single_renderer(&self.render_node) {
                             Ok(mut renderer) => {
                                 // create render elements
                                 // for now, just empty elements - the surface thread will populate them
-                                let elements = smithay::backend::drm::output::DrmOutputRenderElements::<
-                                    GlMultiRenderer, 
-                                    SwlElement<GlMultiRenderer>
-                                >::default();
-                                
+                                let elements =
+                                    smithay::backend::drm::output::DrmOutputRenderElements::<
+                                        GlMultiRenderer,
+                                        SwlElement<GlMultiRenderer>,
+                                    >::default();
+
                                 // get planes for this CRTC
-                                let planes = self.drm.device().planes(&crtc)
-                                    .ok();
-                                
+                                let planes = self.drm.device().planes(&crtc).ok();
+
                                 // create the compositor
                                 match self.drm.lock().initialize_output(
                                     crtc,
                                     drm_mode,
                                     &[conn],
-                                    &output,  // use output as OutputModeSource
+                                    &output, // use output as OutputModeSource
                                     planes,
                                     &mut renderer,
                                     &elements,
@@ -242,7 +250,7 @@ impl Device {
                                 continue;
                             }
                         }
-                        
+
                         // store output and crtc mapping
                         self.outputs.insert(conn, output);
                         self.surfaces.insert(crtc, conn);
@@ -253,7 +261,7 @@ impl Device {
                 }
             }
         }
-        
+
         let outputs: Vec<Output> = self.outputs.values().cloned().collect();
         info!("Found {} connected output(s)", outputs.len());
         Ok(outputs)
@@ -267,44 +275,48 @@ impl Device {
         // for now, consider all devices in use if they exist
         // in the future we'd check if this device has outputs
         let in_use = primary_node.is_none() || primary_node == Some(&self.drm_node);
-        
-        debug!("update_egl: primary_node={:?}, self.drm_node={:?}, in_use={}", 
-               primary_node, self.drm_node, in_use);
-        
+
+        debug!(
+            "update_egl: primary_node={:?}, self.drm_node={:?}, in_use={}",
+            primary_node, self.drm_node, in_use
+        );
+
         if in_use {
             if self.egl.is_none() {
                 let egl = init_egl(&self.gbm)?;
-                
+
                 // create shared context for renderer
                 let shared_context = EGLContext::new_shared_with_priority(
                     &egl.display,
                     &egl.context,
                     ContextPriority::High,
                 )?;
-                
+
                 let renderer = unsafe { GlowRenderer::new(shared_context) }?;
-                
+
                 // create allocator
                 let allocator = GbmAllocator::new(
                     self.gbm.clone(),
                     GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
                 );
-                
+
                 self.allocator = Some(allocator.clone());
                 self.egl = Some(egl);
-                
+
                 // add to GPU manager's API
                 info!("Adding render node {:?} to GPU manager", self.render_node);
-                gpu_manager.as_mut().add_node(self.render_node, allocator, renderer);
-                self.renderer = None;  // renderer is moved to the GPU manager
-                
+                gpu_manager
+                    .as_mut()
+                    .add_node(self.render_node, allocator, renderer);
+                self.renderer = None; // renderer is moved to the GPU manager
+
                 // notify surfaces about the new GPU node
                 if let Some(egl_context) = self.egl.as_ref() {
                     self.surface_manager.update_surface_nodes(
                         self.render_node,
                         &self.gbm,
                         egl_context,
-                        true,  // add node
+                        true, // add node
                     )?;
                 }
             }
@@ -318,10 +330,10 @@ impl Device {
                         self.render_node,
                         &self.gbm,
                         egl_context,
-                        false,  // remove node
+                        false, // remove node
                     );
                 }
-                
+
                 self.egl = None;
                 self.allocator = None;
                 self.renderer = None;
@@ -330,7 +342,7 @@ impl Device {
             Ok(false)
         }
     }
-    
+
     /// Create a new DRM device from a file descriptor
     pub fn new(
         session: &mut impl Session,
@@ -341,7 +353,7 @@ impl Device {
         primary_node: Arc<RwLock<Option<DrmNode>>>,
     ) -> Result<Self> {
         info!("Initializing DRM device: {}", path.display());
-        
+
         // open the device file
         let fd = session
             .open(
@@ -350,24 +362,23 @@ impl Device {
             )
             .map_err(|e| anyhow::anyhow!("Failed to open device {}: {:?}", path.display(), e))?;
         let fd = DrmDeviceFd::new(DeviceFd::from(fd));
-        
+
         // initialize DRM device
         let (drm_device, notifier) = DrmDevice::new(fd.clone(), false)
             .with_context(|| format!("Failed to initialize drm device for: {}", path.display()))?;
-        
+
         let drm_node = DrmNode::from_dev_id(dev)?;
         let supports_atomic = drm_device.is_atomic();
-        
+
         info!(
             "DRM device initialized: {:?}, atomic modesetting: {}",
-            drm_node,
-            supports_atomic
+            drm_node, supports_atomic
         );
-        
+
         // initialize GBM for buffer allocation
         let gbm = GbmDevice::new(fd)
             .with_context(|| format!("Failed to initialize GBM device for {}", path.display()))?;
-        
+
         // try to initialize EGL temporarily to get render formats
         let (render_node, render_formats) = match init_egl(&gbm) {
             Ok(egl) => {
@@ -377,10 +388,10 @@ impl Device {
                     .ok()
                     .and_then(std::convert::identity)
                     .unwrap_or(drm_node);
-                
+
                 // get render formats from the EGL context
                 let formats = egl.context.dmabuf_texture_formats().clone();
-                
+
                 info!("EGL initialized, render node: {:?}", render_node);
                 // drop the EGL context for now, we'll recreate it later if needed
                 (render_node, formats)
@@ -390,23 +401,20 @@ impl Device {
                 (drm_node, Default::default())
             }
         };
-        
+
         // create allocator for the DrmOutputManager
         let allocator = GbmAllocator::new(
             gbm.clone(),
             GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
         );
-        
+
         // create framebuffer exporter
-        let fb_exporter = GbmFramebufferExporter::new(
-            gbm.clone(),
-            render_node.into(),
-        );
-        
+        let fb_exporter = GbmFramebufferExporter::new(gbm.clone(), render_node.into());
+
         // check cursor size from DRM device
         let cursor_size = drm_device.cursor_size();
         info!("DRM device cursor size: {:?}", cursor_size);
-        
+
         // create DrmOutputManager
         let drm = DrmOutputManager::new(
             drm_device,
@@ -422,35 +430,38 @@ impl Device {
             ],
             render_formats,
         );
-        
+
         // register DRM event handler - need to clone drm_node for the closure
         let node_for_handler = drm_node.clone();
         let token = event_loop
-            .insert_source(notifier, move |event, metadata, state: &mut crate::state::State| {
-                match event {
-                    DrmEvent::VBlank(crtc) => {
-                        // debug!("VBlank event for CRTC {:?}", crtc);
-                        // forward to the surface via surface manager
-                        if let crate::state::BackendData::Kms(kms) = &state.backend {
-                            if let Some(device) = kms.drm_devices.get(&node_for_handler) {
-                                device.surface_manager.on_vblank(crtc, metadata.take());
+            .insert_source(
+                notifier,
+                move |event, metadata, state: &mut crate::state::State| {
+                    match event {
+                        DrmEvent::VBlank(crtc) => {
+                            // debug!("VBlank event for CRTC {:?}", crtc);
+                            // forward to the surface via surface manager
+                            if let crate::state::BackendData::Kms(kms) = &state.backend {
+                                if let Some(device) = kms.drm_devices.get(&node_for_handler) {
+                                    device.surface_manager.on_vblank(crtc, metadata.take());
+                                }
                             }
                         }
+                        DrmEvent::Error(err) => {
+                            error!(?err, "DRM device error");
+                        }
                     }
-                    DrmEvent::Error(err) => {
-                        error!(?err, "DRM device error");
-                    }
-                }
-            })
+                },
+            )
             .context("Failed to add drm device to event loop")?;
-        
+
         Ok(Device {
             drm,
             drm_node,
             gbm,
             allocator: Some(allocator),
-            renderer: None,   // will be created when device is used
-            egl: None,        // will be created when device is used
+            renderer: None, // will be created when device is used
+            egl: None,      // will be created when device is used
             render_node,
             supports_atomic,
             event_token: Some(token),
@@ -463,9 +474,13 @@ impl Device {
 }
 
 /// Create an output for a DRM connector
-fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle, display_handle: &DisplayHandle) -> Result<Output> {
+fn create_output_for_conn(
+    drm: &mut DrmDevice,
+    conn: connector::Handle,
+    display_handle: &DisplayHandle,
+) -> Result<Output> {
     use smithay::reexports::drm::control::Device as ControlDevice;
-    
+
     let conn_info = drm
         .get_connector(conn, false)
         .with_context(|| "Failed to query connector info")?;
@@ -501,22 +516,18 @@ fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle, display_
                 .unwrap_or_else(|| String::from("Unknown")),
         },
     );
-    
+
     // create the global to advertise this output to Wayland clients
     let _global = output.create_global::<crate::state::State>(display_handle);
     tracing::info!("Created wl_output global for {}", output.name());
-    
+
     Ok(output)
 }
 
 /// Populate available modes for an output
-fn populate_modes(
-    drm: &mut DrmDevice,
-    output: &Output,
-    conn: connector::Handle,
-) -> Result<()> {
+fn populate_modes(drm: &mut DrmDevice, output: &Output, conn: connector::Handle) -> Result<()> {
     use smithay::reexports::drm::control::Device as ControlDevice;
-    
+
     let conn_info = drm.get_connector(conn, false)?;
     let Some(mode) = conn_info
         .modes()
@@ -545,7 +556,7 @@ fn populate_modes(
         modes.push(mode.clone());
         output.add_mode(mode);
     }
-    
+
     // remove any modes that no longer exist
     for mode in output
         .modes()

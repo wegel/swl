@@ -16,26 +16,26 @@ pub enum Action {
     CloseWindow,
     ToggleFloating,
     Fullscreen,
-    
+
     // layout control
     IncreaseMasterWidth,
-    DecreaseMasterWidth, 
+    DecreaseMasterWidth,
     IncreaseMasterCount,
     DecreaseMasterCount,
-    
+
     // tabbed mode
     ToggleLayoutMode,
     NextTab,
     PrevTab,
-    
+
     // applications
     LaunchTerminal,
     LaunchMenu,
-    
+
     // workspace management
     SwitchToWorkspace(String),
     MoveToWorkspace(String),
-    
+
     // system
     Quit,
     VtSwitch(i32),
@@ -52,9 +52,13 @@ pub struct Keybinding {
 impl Keybinding {
     /// Create a new keybinding
     pub fn new(modifiers: ModifiersState, key: u32, action: Action) -> Self {
-        Self { modifiers, key, action }
+        Self {
+            modifiers,
+            key,
+            action,
+        }
     }
-    
+
     /// Check if this keybinding matches the given modifiers and key
     pub fn matches(&self, modifiers: &ModifiersState, key: Keysym) -> bool {
         // check for exact modifier match
@@ -62,7 +66,7 @@ impl Keybinding {
             && self.modifiers.alt == modifiers.alt
             && self.modifiers.shift == modifiers.shift
             && self.modifiers.logo == modifiers.logo;
-        
+
         mod_match && self.key == key.raw()
     }
 }
@@ -76,31 +80,15 @@ impl Keybindings {
     /// Create default keybindings
     pub fn new() -> Self {
         let modkey = Self::get_modkey();
-        
+
         let mut bindings = Vec::new();
-        
+
         // window management
-        bindings.push(Keybinding::new(
-            modkey,
-            xkb::KEY_j,
-            Action::FocusNext,
-        ));
-        bindings.push(Keybinding::new(
-            modkey,
-            xkb::KEY_k,
-            Action::FocusPrev,
-        ));
-        bindings.push(Keybinding::new(
-            modkey,
-            xkb::KEY_m,
-            Action::Zoom,
-        ));
+        bindings.push(Keybinding::new(modkey, xkb::KEY_j, Action::FocusNext));
+        bindings.push(Keybinding::new(modkey, xkb::KEY_k, Action::FocusPrev));
+        bindings.push(Keybinding::new(modkey, xkb::KEY_m, Action::Zoom));
         // close window
-        bindings.push(Keybinding::new(
-            modkey,
-            xkb::KEY_q,
-            Action::CloseWindow,
-        ));
+        bindings.push(Keybinding::new(modkey, xkb::KEY_q, Action::CloseWindow));
         bindings.push(Keybinding::new(
             ModifiersState {
                 shift: true,
@@ -109,12 +97,8 @@ impl Keybindings {
             xkb::KEY_space,
             Action::ToggleFloating,
         ));
-        bindings.push(Keybinding::new(
-            modkey,
-            xkb::KEY_f,
-            Action::Fullscreen,
-        ));
-        
+        bindings.push(Keybinding::new(modkey, xkb::KEY_f, Action::Fullscreen));
+
         // layout control
         bindings.push(Keybinding::new(
             modkey,
@@ -136,18 +120,14 @@ impl Keybindings {
             xkb::KEY_comma,
             Action::DecreaseMasterCount,
         ));
-        
+
         // tabbed mode
         bindings.push(Keybinding::new(
             modkey,
             xkb::KEY_t,
             Action::ToggleLayoutMode,
         ));
-        bindings.push(Keybinding::new(
-            modkey,
-            xkb::KEY_Tab,
-            Action::NextTab,
-        ));
+        bindings.push(Keybinding::new(modkey, xkb::KEY_Tab, Action::NextTab));
         bindings.push(Keybinding::new(
             ModifiersState {
                 shift: true,
@@ -156,19 +136,15 @@ impl Keybindings {
             xkb::KEY_Tab,
             Action::PrevTab,
         ));
-        
+
         // applications
         bindings.push(Keybinding::new(
             modkey,
             xkb::KEY_Return,
             Action::LaunchTerminal,
         ));
-        bindings.push(Keybinding::new(
-            modkey,
-            xkb::KEY_d,
-            Action::LaunchMenu,
-        ));
-        
+        bindings.push(Keybinding::new(modkey, xkb::KEY_d, Action::LaunchMenu));
+
         // system
         // quit - Super+Shift+e
         bindings.push(Keybinding::new(
@@ -176,10 +152,10 @@ impl Keybindings {
                 shift: true,
                 ..modkey
             },
-            xkb::KEY_e,  // lowercase e, since we now use raw_latin_sym_or_raw_current_sym
+            xkb::KEY_e, // lowercase e, since we now use raw_latin_sym_or_raw_current_sym
             Action::Quit,
         ));
-        
+
         // workspace switching - Super+1-9 and Super+0 for workspace 10
         for i in 1..=9 {
             bindings.push(Keybinding::new(
@@ -194,7 +170,7 @@ impl Keybindings {
             xkb::KEY_0,
             Action::SwitchToWorkspace("10".to_string()),
         ));
-        
+
         // move window to workspace - Super+Shift+1-9 and Super+Shift+0 for workspace 10
         for i in 1..=9 {
             bindings.push(Keybinding::new(
@@ -215,8 +191,8 @@ impl Keybindings {
             xkb::KEY_0,
             Action::MoveToWorkspace("10".to_string()),
         ));
-        
-        // VT switching - Ctrl+Alt+F1-F12 
+
+        // VT switching - Ctrl+Alt+F1-F12
         for vt in 1..=12 {
             bindings.push(Keybinding::new(
                 ModifiersState {
@@ -228,16 +204,16 @@ impl Keybindings {
                 Action::VtSwitch(vt as i32),
             ));
         }
-        
+
         debug!("Initialized {} keybindings", bindings.len());
-        
+
         Self { bindings }
     }
-    
+
     /// Get the modifier key from environment or default to Super
     fn get_modkey() -> ModifiersState {
         let modkey_str = std::env::var("SWL_MODKEY").unwrap_or_else(|_| "super".to_string());
-        
+
         match modkey_str.to_lowercase().as_str() {
             "alt" => ModifiersState {
                 alt: true,
@@ -249,21 +225,26 @@ impl Keybindings {
             },
         }
     }
-    
+
     /// Check if any keybinding matches and return its action
-    pub fn check(&self, modifiers: &ModifiersState, key: Keysym, key_state: KeyState) -> Option<Action> {
+    pub fn check(
+        &self,
+        modifiers: &ModifiersState,
+        key: Keysym,
+        key_state: KeyState,
+    ) -> Option<Action> {
         // only trigger on key press, not release
         if key_state != KeyState::Pressed {
             return None;
         }
-        
+
         for binding in &self.bindings {
             if binding.matches(modifiers, key) {
                 tracing::debug!("Keybinding matched: {:?}", binding.action);
                 return Some(binding.action.clone());
             }
         }
-        
+
         None
     }
 }

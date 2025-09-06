@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::process::Command;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Update systemd user environment with WAYLAND_DISPLAY
 pub fn update_systemd_environment(socket_name: &str) {
     // check if we're running under systemd
-    if std::env::var("SYSTEMD_EXEC_PID").is_ok() || std::path::Path::new("/run/systemd/system").exists() {
-        info!("Updating systemd user environment with WAYLAND_DISPLAY={}", socket_name);
-        
+    if std::env::var("SYSTEMD_EXEC_PID").is_ok()
+        || std::path::Path::new("/run/systemd/system").exists()
+    {
+        info!(
+            "Updating systemd user environment with WAYLAND_DISPLAY={}",
+            socket_name
+        );
+
         match Command::new("systemctl")
             .args(["--user", "import-environment", "WAYLAND_DISPLAY"])
             .env("WAYLAND_DISPLAY", socket_name)
@@ -18,7 +23,10 @@ pub fn update_systemd_environment(socket_name: &str) {
                 info!("Successfully updated systemd environment");
             }
             Ok(status) => {
-                warn!("Failed to import WAYLAND_DISPLAY into systemd: {:?}", status.code());
+                warn!(
+                    "Failed to import WAYLAND_DISPLAY into systemd: {:?}",
+                    status.code()
+                );
             }
             Err(err) => {
                 error!("Failed to run systemctl: {}", err);
@@ -29,8 +37,11 @@ pub fn update_systemd_environment(socket_name: &str) {
 
 /// Update D-Bus activation environment with WAYLAND_DISPLAY
 pub fn update_dbus_environment(socket_name: &str) {
-    info!("Updating D-Bus activation environment with WAYLAND_DISPLAY={}", socket_name);
-    
+    info!(
+        "Updating D-Bus activation environment with WAYLAND_DISPLAY={}",
+        socket_name
+    );
+
     match Command::new("dbus-update-activation-environment")
         .arg("--systemd")
         .arg(format!("WAYLAND_DISPLAY={}", socket_name))
@@ -40,11 +51,17 @@ pub fn update_dbus_environment(socket_name: &str) {
             info!("Successfully updated D-Bus activation environment");
         }
         Ok(status) => {
-            warn!("Failed to update D-Bus activation environment: {:?}", status.code());
+            warn!(
+                "Failed to update D-Bus activation environment: {:?}",
+                status.code()
+            );
         }
         Err(err) => {
             // dbus-update-activation-environment might not be available
-            info!("Could not update D-Bus activation environment: {} (this is ok if not using D-Bus)", err);
+            info!(
+                "Could not update D-Bus activation environment: {} (this is ok if not using D-Bus)",
+                err
+            );
         }
     }
 }
@@ -57,7 +74,7 @@ pub fn update_environment(socket_name: &str) {
         std::env::set_var("WAYLAND_DISPLAY", socket_name);
     }
     info!("Set WAYLAND_DISPLAY={} in current process", socket_name);
-    
+
     update_systemd_environment(socket_name);
     update_dbus_environment(socket_name);
 }

@@ -12,8 +12,7 @@ use smithay::{
         },
         wayland_server::{
             backend::{ClientId, GlobalId},
-            Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
-            Resource,
+            Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
         },
     },
     utils::{Logical, Physical, Point, Size, Transform},
@@ -96,8 +95,10 @@ pub enum OutputConfiguration {
 
 impl TryFrom<&mut PendingOutputConfigurationInner> for OutputConfiguration {
     type Error = zwlr_output_configuration_head_v1::Error;
-    
-    fn try_from(value: &mut PendingOutputConfigurationInner) -> Result<OutputConfiguration, Self::Error> {
+
+    fn try_from(
+        value: &mut PendingOutputConfigurationInner,
+    ) -> Result<OutputConfiguration, Self::Error> {
         Ok(OutputConfiguration::Enabled {
             mode: value.mode.clone(),
             position: value.position,
@@ -109,10 +110,7 @@ impl TryFrom<&mut PendingOutputConfigurationInner> for OutputConfiguration {
 }
 
 impl OutputConfigurationState {
-    pub fn new<F>(
-        dh: &DisplayHandle,
-        client_filter: F,
-    ) -> OutputConfigurationState
+    pub fn new<F>(dh: &DisplayHandle, client_filter: F) -> OutputConfigurationState
     where
         F: for<'a> Fn(&'a Client) -> bool + Clone + Send + Sync + 'static,
     {
@@ -145,7 +143,7 @@ impl OutputConfigurationState {
     #[allow(dead_code)] // TODO: should be called when outputs are removed
     pub fn remove_heads<'a>(&mut self, outputs: impl Iterator<Item = &'a Output>) {
         let to_remove: Vec<_> = outputs.cloned().collect();
-        
+
         // notify clients about removed heads
         for output in &to_remove {
             for instance in &mut self.instances {
@@ -161,7 +159,7 @@ impl OutputConfigurationState {
                 instance.heads.retain(|h| !to_remove.contains(&h.output));
             }
         }
-        
+
         self.outputs.retain(|o| !to_remove.contains(o));
     }
 
@@ -218,7 +216,7 @@ where
     // send output properties
     instance.obj.name(output.name());
     instance.obj.description(output.description());
-    
+
     let physical = output.physical_properties();
     if physical.size.w != 0 && physical.size.h != 0 {
         instance.obj.physical_size(physical.size.w, physical.size.h);
@@ -226,7 +224,7 @@ where
 
     // send modes
     let output_modes = output.modes();
-    
+
     // remove old modes
     instance.modes.retain_mut(|m| {
         if !output_modes.contains(m.data::<Mode>().unwrap()) {
@@ -255,7 +253,11 @@ where
                 instance.obj.mode(&mode);
                 mode.size(output_mode.size.w, output_mode.size.h);
                 mode.refresh(output_mode.refresh);
-                if output.preferred_mode().map(|p| p == output_mode).unwrap_or(false) {
+                if output
+                    .preferred_mode()
+                    .map(|p| p == output_mode)
+                    .unwrap_or(false)
+                {
                     mode.preferred();
                 }
                 instance.modes.push(mode);
@@ -267,7 +269,11 @@ where
             None
         } {
             // mark current mode
-            if output.current_mode().map(|c| c == output_mode).unwrap_or(false) {
+            if output
+                .current_mode()
+                .map(|c| c == output_mode)
+                .unwrap_or(false)
+            {
                 instance.obj.current_mode(mode);
             }
         }
@@ -278,7 +284,7 @@ where
     let point = output.current_location();
     instance.obj.position(point.x, point.y);
     instance.obj.transform(output.current_transform().into());
-    
+
     let scale = output.current_scale().fractional_scale();
     instance.obj.scale(scale);
 
@@ -298,7 +304,9 @@ where
     // adaptive sync support (version 4)
     if instance.obj.version() >= zwlr_output_head_v1::EVT_ADAPTIVE_SYNC_SINCE {
         // for now, we don't support adaptive sync
-        instance.obj.adaptive_sync(zwlr_output_head_v1::AdaptiveSyncState::Disabled);
+        instance
+            .obj
+            .adaptive_sync(zwlr_output_head_v1::AdaptiveSyncState::Disabled);
     }
 }
 
@@ -369,12 +377,7 @@ impl Dispatch<ZwlrOutputManagerV1, (), State> for OutputConfigurationState {
         }
     }
 
-    fn destroyed(
-        state: &mut State,
-        _client: ClientId,
-        obj: &ZwlrOutputManagerV1,
-        _data: &(),
-    ) {
+    fn destroyed(state: &mut State, _client: ClientId, obj: &ZwlrOutputManagerV1, _data: &()) {
         let state = state.output_configuration_state();
         state.instances.retain(|instance| instance.obj != *obj);
     }
@@ -455,7 +458,8 @@ impl Dispatch<ZwlrOutputConfigurationV1, PendingConfiguration, State> for Output
                     return;
                 }
 
-                let conf_head = data_init.init(id, Mutex::new(PendingOutputConfigurationInner::default()));
+                let conf_head =
+                    data_init.init(id, Mutex::new(PendingOutputConfigurationInner::default()));
                 pending.heads.push((head, Some(conf_head)));
             }
             zwlr_output_configuration_v1::Request::DisableHead { head } => {
@@ -504,9 +508,7 @@ impl Dispatch<ZwlrOutputConfigurationV1, PendingConfiguration, State> for Output
                             Some(head) => {
                                 let head_data = head.data::<PendingOutputConfiguration>().unwrap();
                                 let mut config = head_data.lock().unwrap();
-                                (&mut *config)
-                                    .try_into()
-                                    .map(|c| (output, c))
+                                (&mut *config).try_into().map(|c| (output, c))
                             }
                             None => Ok((output, OutputConfiguration::Disabled)),
                         }
@@ -538,7 +540,9 @@ impl Dispatch<ZwlrOutputConfigurationV1, PendingConfiguration, State> for Output
 }
 
 // dispatch for configuration heads
-impl Dispatch<ZwlrOutputConfigurationHeadV1, PendingOutputConfiguration, State> for OutputConfigurationState {
+impl Dispatch<ZwlrOutputConfigurationHeadV1, PendingOutputConfiguration, State>
+    for OutputConfigurationState
+{
     fn request(
         _state: &mut State,
         _client: &Client,
@@ -558,13 +562,12 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, PendingOutputConfiguration, State> 
                     );
                     return;
                 }
-                let mode_data = mode.data::<Mode>().cloned()
-                    .ok_or_else(|| {
-                        obj.post_error(
-                            zwlr_output_configuration_head_v1::Error::InvalidMode,
-                            "Invalid mode".to_string(),
-                        );
-                    });
+                let mode_data = mode.data::<Mode>().cloned().ok_or_else(|| {
+                    obj.post_error(
+                        zwlr_output_configuration_head_v1::Error::InvalidMode,
+                        "Invalid mode".to_string(),
+                    );
+                });
                 if let Ok(mode) = mode_data {
                     pending.mode = Some(ModeConfiguration::Mode(mode));
                 }
@@ -596,7 +599,7 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, PendingOutputConfiguration, State> 
                     );
                     return;
                 }
-                pending.position = Some(Point::from((x, y)));  // global coordinates
+                pending.position = Some(Point::from((x, y))); // global coordinates
             }
             zwlr_output_configuration_head_v1::Request::SetScale { scale } => {
                 let mut pending = data.lock().unwrap();

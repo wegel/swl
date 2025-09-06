@@ -3,10 +3,10 @@
 use crate::State;
 use smithay::{
     delegate_xdg_activation,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::xdg_activation::{
         XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
 };
 
 impl XdgActivationHandler for State {
@@ -20,7 +20,12 @@ impl XdgActivationHandler for State {
         true
     }
 
-    fn request_activation(&mut self, _token: XdgActivationToken, _token_data: XdgActivationTokenData, surface: WlSurface) {
+    fn request_activation(
+        &mut self,
+        _token: XdgActivationToken,
+        _token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
         // For now, just log the request
         // In the future, we would handle urgent window activation here
         tracing::debug!("XDG activation requested for surface: {:?}", surface);

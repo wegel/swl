@@ -4,9 +4,7 @@ use crate::state::{BackendData, State};
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
     delegate_dmabuf,
-    wayland::{
-        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
-    },
+    wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
 };
 use tracing::debug;
 
@@ -21,7 +19,6 @@ impl DmabufHandler for State {
         dmabuf: Dmabuf,
         import_notifier: ImportNotifier,
     ) {
-        
         match &mut self.backend {
             BackendData::Kms(kms) => {
                 match kms.dmabuf_imported(global, dmabuf) {

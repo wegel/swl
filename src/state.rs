@@ -1,62 +1,56 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::{
-    backend::kms::{KmsState, Device},
+    backend::kms::{Device, KmsState},
     backend::render::cursor::{CursorState, CursorStateInner},
     input::keybindings::Keybindings,
     shell::Shell,
-    wayland::output_configuration::{OutputConfigurationState, OutputConfigurationHandler, OutputConfiguration},
+    wayland::output_configuration::{
+        OutputConfiguration, OutputConfigurationHandler, OutputConfigurationState,
+    },
 };
-use std::sync::{Arc, Mutex, RwLock};
 use smithay::{
     backend::{
         drm::DrmNode,
         input::InputEvent,
-        renderer::element::{RenderElementStates, default_primary_scanout_output_compare},
+        renderer::element::{default_primary_scanout_output_compare, RenderElementStates},
         session::Session,
     },
     desktop::{
-        Window,
-        PopupManager,
-        utils::{
-            update_surface_primary_scanout_output,
-            with_surfaces_surface_tree,
-        },
+        utils::{update_surface_primary_scanout_output, with_surfaces_surface_tree},
+        PopupManager, Window,
     },
-    input::{
-        keyboard::XkbConfig,
-        Seat, SeatState,
-    },
+    input::{keyboard::XkbConfig, Seat, SeatState},
     output::Output,
+    reexports::{
+        calloop::{LoopHandle, LoopSignal},
+        wayland_server::{protocol::wl_surface::WlSurface, DisplayHandle},
+    },
     wayland::{
         compositor::CompositorState,
-        dmabuf::{DmabufState, DmabufFeedbackBuilder},
+        cursor_shape::CursorShapeManagerState,
+        dmabuf::{DmabufFeedbackBuilder, DmabufState},
         fractional_scale::with_fractional_scale,
+        fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
+        pointer_gestures::PointerGesturesState,
         presentation::PresentationState,
+        relative_pointer::RelativePointerManagerState,
         selection::{
-            data_device::DataDeviceState,
-            primary_selection::PrimarySelectionState,
+            data_device::DataDeviceState, primary_selection::PrimarySelectionState,
             wlr_data_control::DataControlState,
         },
         shell::{
-            xdg::{XdgShellState, ToplevelSurface},
             wlr_layer::WlrLayerShellState,
+            xdg::{ToplevelSurface, XdgShellState},
         },
         shm::ShmState,
-        viewporter::ViewporterState,
-        pointer_gestures::PointerGesturesState,
-        relative_pointer::RelativePointerManagerState,
         text_input::TextInputManagerState,
+        viewporter::ViewporterState,
         xdg_activation::XdgActivationState,
-        fractional_scale::FractionalScaleManagerState,
-        cursor_shape::CursorShapeManagerState,
-    },
-    reexports::{
-        calloop::{LoopHandle, LoopSignal},
-        wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
     },
 };
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Backend data enum
 pub enum BackendData {
@@ -132,17 +126,30 @@ impl OutputConfigurationHandler for State {
     fn output_configuration_state(&mut self) -> &mut OutputConfigurationState {
         &mut self.output_configuration_state
     }
-    
+
     fn test_configuration(&mut self, configs: Vec<(Output, OutputConfiguration)>) -> bool {
         // for now, we'll accept any valid configuration
         // in the future, we could test if the mode is actually supported, etc.
-        tracing::info!("Testing output configuration with {} outputs", configs.len());
+        tracing::info!(
+            "Testing output configuration with {} outputs",
+            configs.len()
+        );
         for (output, config) in &configs {
             match config {
-                OutputConfiguration::Enabled { mode, position, scale, transform, .. } => {
+                OutputConfiguration::Enabled {
+                    mode,
+                    position,
+                    scale,
+                    transform,
+                    ..
+                } => {
                     tracing::info!(
                         "Output {}: mode={:?}, pos={:?}, scale={:?}, transform={:?}",
-                        output.name(), mode, position, scale, transform
+                        output.name(),
+                        mode,
+                        position,
+                        scale,
+                        transform
                     );
                 }
                 OutputConfiguration::Disabled => {
@@ -152,43 +159,61 @@ impl OutputConfigurationHandler for State {
         }
         true
     }
-    
+
     fn apply_configuration(&mut self, configs: Vec<(Output, OutputConfiguration)>) -> bool {
         tracing::info!("Applying output configuration to {} outputs", configs.len());
-        
+
         // apply each output configuration
         for (output, config) in configs {
             match config {
-                OutputConfiguration::Enabled { mode, position, scale, transform, .. } => {
+                OutputConfiguration::Enabled {
+                    mode,
+                    position,
+                    scale,
+                    transform,
+                    ..
+                } => {
                     // apply mode if specified
                     if let Some(mode_config) = mode {
                         match mode_config {
                             crate::wayland::output_configuration::ModeConfiguration::Mode(mode) => {
                                 output.change_current_state(Some(mode), None, None, None);
-                                tracing::info!("Set mode for {}: {}x{}@{}", 
-                                    output.name(), mode.size.w, mode.size.h, mode.refresh);
+                                tracing::info!(
+                                    "Set mode for {}: {}x{}@{}",
+                                    output.name(),
+                                    mode.size.w,
+                                    mode.size.h,
+                                    mode.refresh
+                                );
                             }
-                            crate::wayland::output_configuration::ModeConfiguration::Custom { size, refresh } => {
+                            crate::wayland::output_configuration::ModeConfiguration::Custom {
+                                size,
+                                refresh,
+                            } => {
                                 // custom modes not yet supported in our backend
-                                tracing::warn!("Custom mode {}x{}@{:?} not yet supported", 
-                                    size.w, size.h, refresh);
+                                tracing::warn!(
+                                    "Custom mode {}x{}@{:?} not yet supported",
+                                    size.w,
+                                    size.h,
+                                    refresh
+                                );
                             }
                         }
                     }
-                    
+
                     // apply position if specified
                     if let Some(pos) = position {
                         output.change_current_state(None, None, None, Some(pos));
                         tracing::info!("Set position for {}: {:?}", output.name(), pos);
                     }
-                    
+
                     // apply scale if specified
                     if let Some(scale_val) = scale {
                         let scale = smithay::output::Scale::Fractional(scale_val);
                         output.change_current_state(None, None, Some(scale), None);
                         tracing::info!("Set scale for {}: {}", output.name(), scale_val);
                     }
-                    
+
                     // apply transform if specified
                     if let Some(transform_val) = transform {
                         output.change_current_state(None, Some(transform_val), None, None);
@@ -202,31 +227,41 @@ impl OutputConfigurationHandler for State {
                 }
             }
         }
-        
+
         // update output configuration state
         self.output_configuration_state.update();
-        
+
         // update virtual outputs after configuration changes
-        tracing::debug!("Updating virtual outputs after configuration changes, {} physical outputs available", self.outputs.len());
+        tracing::debug!(
+            "Updating virtual outputs after configuration changes, {} physical outputs available",
+            self.outputs.len()
+        );
         for output in &self.outputs {
-            tracing::debug!("Physical output {} - scale: {}, transform: {:?}", 
-                output.name(), output.current_scale().fractional_scale(), output.current_transform());
+            tracing::debug!(
+                "Physical output {} - scale: {}, transform: {:?}",
+                output.name(),
+                output.current_scale().fractional_scale(),
+                output.current_transform()
+            );
         }
         {
             let mut shell = self.shell.write().unwrap();
-            tracing::debug!("Calling virtual_output_manager.update_all with {} outputs", self.outputs.len());
+            tracing::debug!(
+                "Calling virtual_output_manager.update_all with {} outputs",
+                self.outputs.len()
+            );
             shell.virtual_output_manager.update_all(&self.outputs);
             tracing::debug!("Virtual output update_all completed");
-            
+
             // update output positions in the space after configuration changes
             for output in &self.outputs {
                 shell.update_output_position(output);
             }
         }
-        
+
         // update cursor bounds after position changes
         self.update_cursor_bounds();
-        
+
         // trigger re-arrangement of windows and update geometry
         let mut shell = self.shell.write().unwrap();
         for output in &self.outputs {
@@ -236,7 +271,7 @@ impl OutputConfigurationHandler for State {
                 let mode = output.current_mode().unwrap();
                 let transform = output.current_transform();
                 let scale = output.current_scale().fractional_scale();
-                
+
                 // apply transform first (on physical size), then convert to logical
                 Transform::from(transform)
                     .transform_size(mode.size)
@@ -244,29 +279,31 @@ impl OutputConfigurationHandler for State {
                     .to_logical(scale)
                     .to_i32_round()
             };
-            
+
             // get the available area from layer map
             let layer_map = smithay::desktop::layer_map_for_output(output);
             let mut available_area = layer_map.non_exclusive_zone();
-            
+
             // if layer map returns the full output size, use our calculated size
             // (LayerMap doesn't always handle rotation/scale correctly)
-            if available_area.size == output_size || available_area.size == smithay::utils::Size::from((output_size.h, output_size.w)) {
+            if available_area.size == output_size
+                || available_area.size == smithay::utils::Size::from((output_size.h, output_size.w))
+            {
                 available_area = smithay::utils::Rectangle::new(available_area.loc, output_size);
             }
-            
+
             shell.apply_to_all_workspaces_on_output(output, |workspace| {
                 // update workspace geometry (this will mark needs_arrange if area changed)
                 workspace.update_output_geometry(available_area);
             });
         }
         drop(shell);
-        
+
         // schedule render for all outputs
         for output in &self.outputs {
             self.backend.schedule_render(output);
         }
-        
+
         true
     }
 }
@@ -276,7 +313,7 @@ impl BackendData {
     pub fn schedule_render(&mut self, output: &Output) {
         match self {
             BackendData::Kms(kms) => kms.schedule_render(output),
-            BackendData::Uninitialized => {},
+            BackendData::Uninitialized => {}
         }
     }
 }
@@ -288,22 +325,25 @@ impl State {
         loop_handle: LoopHandle<'static, State>,
         loop_signal: LoopSignal,
     ) -> Self {
-        
         // create compositor state
         let compositor_state = CompositorState::new::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new::<State>(&display_handle);
-        let xdg_decoration_state = smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<State>(&display_handle);
+        let xdg_decoration_state =
+            smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<State>(
+                &display_handle,
+            );
         let layer_shell_state = WlrLayerShellState::new::<State>(&display_handle);
         let shm_state = ShmState::new::<State>(&display_handle, vec![]);
         let data_device_state = DataDeviceState::new::<State>(&display_handle);
         let dmabuf_state = DmabufState::new();
-        let output_manager_state = OutputManagerState::new_with_xdg_output::<State>(&display_handle);
+        let output_manager_state =
+            OutputManagerState::new_with_xdg_output::<State>(&display_handle);
         let output_configuration_state = OutputConfigurationState::new(&display_handle, |_| true);
-        
+
         // create seat state and the default seat
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&display_handle, "seat0");
-        
+
         // parse keyboard configuration from environment variables
         let xkb_layout = std::env::var("SWL_XKB_LAYOUT")
             .unwrap_or_else(|_| "us".to_string())
@@ -317,7 +357,7 @@ impl State {
         let xkb_options = std::env::var("SWL_XKB_OPTIONS")
             .ok()
             .filter(|s| !s.is_empty());
-        
+
         let repeat_rate = std::env::var("SWL_REPEAT_RATE")
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
@@ -326,51 +366,59 @@ impl State {
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
             .unwrap_or(400);
-        
+
         // create XkbConfig with leaked strings for 'static lifetime
         let xkb_config = XkbConfig {
-            rules: "",  // use default rules
+            rules: "", // use default rules
             model: xkb_model,
             layout: xkb_layout,
             variant: xkb_variant,
             options: xkb_options.clone(),
         };
-        
+
         tracing::info!(
             "Configuring keyboard: layout='{}', variant='{}', model='{}', options={:?}, rate={}, delay={}",
             xkb_config.layout, xkb_config.variant, xkb_config.model, xkb_config.options,
             repeat_rate, repeat_delay
         );
-        
+
         // add pointer and keyboard capabilities
-        seat.add_keyboard(xkb_config, repeat_delay, repeat_rate).unwrap();
+        seat.add_keyboard(xkb_config, repeat_delay, repeat_rate)
+            .unwrap();
         seat.add_pointer();
-        
+
         // add cursor status to seat user data
         seat.user_data().insert_if_missing_threadsafe(|| {
             Mutex::new(smithay::input::pointer::CursorImageStatus::default_named())
         });
         // add cursor theme state
-        seat.user_data().insert_if_missing_threadsafe(crate::backend::render::cursor::CursorState::default);
-        
+        seat.user_data()
+            .insert_if_missing_threadsafe(crate::backend::render::cursor::CursorState::default);
+
         // create the shell
         let shell = Arc::new(RwLock::new(Shell::new()));
-        
+
         // create presentation state
         // using CLOCK_MONOTONIC (id = 1) as the clock
         let presentation_state = PresentationState::new::<State>(&display_handle, 1);
-        
+
         // initialize additional protocol support
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let pointer_gestures_state = PointerGesturesState::new::<State>(&display_handle);
-        let relative_pointer_manager_state = RelativePointerManagerState::new::<State>(&display_handle);
+        let relative_pointer_manager_state =
+            RelativePointerManagerState::new::<State>(&display_handle);
         let text_input_manager_state = TextInputManagerState::new::<State>(&display_handle);
         let primary_selection_state = PrimarySelectionState::new::<State>(&display_handle);
-        let data_control_state = DataControlState::new::<State, _>(&display_handle, Some(&primary_selection_state), |_| true);
+        let data_control_state = DataControlState::new::<State, _>(
+            &display_handle,
+            Some(&primary_selection_state),
+            |_| true,
+        );
         let xdg_activation_state = XdgActivationState::new::<State>(&display_handle);
-        let fractional_scale_manager_state = FractionalScaleManagerState::new::<State>(&display_handle);
+        let fractional_scale_manager_state =
+            FractionalScaleManagerState::new::<State>(&display_handle);
         let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
-        
+
         Self {
             display_handle: display_handle.clone(),
             loop_handle,
@@ -411,7 +459,7 @@ impl State {
             cursor_shape_manager_state,
         }
     }
-    
+
     pub fn session_active(&mut self, active: bool) {
         self.session_active = active;
         if active {
@@ -428,16 +476,16 @@ impl State {
             }
         }
     }
-    
+
     /// Refresh focus to the topmost window in the focus stack
     /// This is called from the main event loop when needs_focus_refresh is set
     pub fn refresh_focus(&mut self) {
         use smithay::utils::IsAlive;
-        
+
         // get current keyboard focus
         let keyboard = self.seat.get_keyboard().unwrap();
         let current_focus = keyboard.current_focus();
-        
+
         // check if current focus is still valid
         if let Some(ref target) = current_focus {
             if target.alive() {
@@ -445,20 +493,24 @@ impl State {
                 return;
             }
         }
-        
+
         // current focus is invalid or none, restore from focus stack
         let window = self.shell.write().unwrap().refresh_focus();
-        
+
         if let Some(window) = window {
             // restore keyboard focus to the window's surface
             let surface = window.toplevel().unwrap().wl_surface().clone();
-            keyboard.set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
-            
+            keyboard.set_focus(
+                self,
+                Some(surface),
+                smithay::utils::SERIAL_COUNTER.next_serial(),
+            );
+
             // also update pointer focus if needed
             if let Some(output) = self.outputs.first() {
                 self.backend.schedule_render(output);
             }
-            
+
             tracing::info!("Focus restored to window");
         } else {
             // no window to focus, clear keyboard focus
@@ -466,71 +518,79 @@ impl State {
             tracing::info!("No window to restore focus to, cleared focus");
         }
     }
-    
-    pub fn process_input_event<B: smithay::backend::input::InputBackend>(&mut self, event: InputEvent<B>) 
-    where
+
+    pub fn process_input_event<B: smithay::backend::input::InputBackend>(
+        &mut self,
+        event: InputEvent<B>,
+    ) where
         <B as smithay::backend::input::InputBackend>::Device: 'static,
     {
         // delegate to our input handler
         self.process_input_event_impl(event);
     }
-    
+
     /// Update primary output and fractional scale for all surfaces on the given output
-    pub fn update_primary_output(&self, output: &Output, render_element_states: &RenderElementStates) {
+    pub fn update_primary_output(
+        &self,
+        output: &Output,
+        render_element_states: &RenderElementStates,
+    ) {
         let shell = self.shell.read().unwrap();
-        
+
         // processor function that updates primary output and fractional scale
-        let processor = |surface: &WlSurface, states: &smithay::wayland::compositor::SurfaceData| {
-            let primary_scanout_output = update_surface_primary_scanout_output(
-                surface,
-                output,
-                states,
-                render_element_states,
-                default_primary_scanout_output_compare,
-            );
-            
-            // if the primary output changed, update the fractional scale
-            if let Some(output) = primary_scanout_output {
-                with_fractional_scale(states, |fraction_scale| {
-                    fraction_scale.set_preferred_scale(output.current_scale().fractional_scale());
-                });
-            }
-        };
-        
+        let processor =
+            |surface: &WlSurface, states: &smithay::wayland::compositor::SurfaceData| {
+                let primary_scanout_output = update_surface_primary_scanout_output(
+                    surface,
+                    output,
+                    states,
+                    render_element_states,
+                    default_primary_scanout_output_compare,
+                );
+
+                // if the primary output changed, update the fractional scale
+                if let Some(output) = primary_scanout_output {
+                    with_fractional_scale(states, |fraction_scale| {
+                        fraction_scale
+                            .set_preferred_scale(output.current_scale().fractional_scale());
+                    });
+                }
+            };
+
         // process all windows in the space
         for window in shell.space.elements() {
             if let Some(toplevel) = window.toplevel() {
                 with_surfaces_surface_tree(toplevel.wl_surface(), processor);
             }
         }
-        
+
         // process layer shell surfaces
         let layer_map = smithay::desktop::layer_map_for_output(output);
         for surface in layer_map.layers() {
             with_surfaces_surface_tree(surface.wl_surface(), processor);
         }
-        
-        // process cursor surfaces  
+
+        // process cursor surfaces
         if let Some(pointer) = self.seat.get_pointer() {
             if let Some(surface) = pointer.current_focus() {
                 with_surfaces_surface_tree(&surface, processor);
             }
         }
     }
-    
+
     /// Update cached cursor bounds based on current output positions
     pub fn update_cursor_bounds(&mut self) {
         if self.outputs.is_empty() {
             self.cursor_bounds = None;
             return;
         }
-        
+
         let shell = self.shell.read().unwrap();
         let mut min_x = f64::INFINITY;
         let mut min_y = f64::INFINITY;
         let mut max_x = f64::NEG_INFINITY;
         let mut max_y = f64::NEG_INFINITY;
-        
+
         for output in &self.outputs {
             if let Some(geometry) = shell.space.output_geometry(output) {
                 let logical_geo = geometry.to_f64();
@@ -540,77 +600,106 @@ impl State {
                 max_y = max_y.max(logical_geo.loc.y + logical_geo.size.h - 1.0);
             }
         }
-        
+
         if min_x != f64::INFINITY {
             use crate::utils::coordinates::GlobalPointF64;
             self.cursor_bounds = Some(smithay::utils::Rectangle::new(
                 GlobalPointF64::new(min_x, min_y).as_point(),
-                smithay::utils::Size::from((max_x - min_x + 1.0, max_y - min_y + 1.0))
+                smithay::utils::Size::from((max_x - min_x + 1.0, max_y - min_y + 1.0)),
             ));
         } else {
             self.cursor_bounds = None;
         }
     }
-    
+
     /// Handle device addition
-    pub fn device_added(&mut self, dev: libc::dev_t, path: &std::path::Path, _dh: &DisplayHandle) -> anyhow::Result<()> {
+    pub fn device_added(
+        &mut self,
+        dev: libc::dev_t,
+        path: &std::path::Path,
+        _dh: &DisplayHandle,
+    ) -> anyhow::Result<()> {
         tracing::info!("Device added: {} ({})", path.display(), dev);
-        
+
         let BackendData::Kms(kms) = &mut self.backend else {
             return Ok(());
         };
-        
+
         // check if session is active
         if !kms.session.is_active() {
             return Ok(());
         }
-        
+
         // check if this is actually a DRM device
         let Ok(drm_node) = DrmNode::from_dev_id(dev) else {
             tracing::debug!("Device {} is not a DRM device", path.display());
             return Ok(());
         };
-        
+
         // don't add the same device twice
         if kms.drm_devices.contains_key(&drm_node) {
             tracing::debug!("Device {:?} already added", drm_node);
             return Ok(());
         }
-        
+
         // create the device
-        match Device::new(&mut kms.session, path, dev, &self.loop_handle, &mut kms.gpu_manager, kms.primary_node.clone()) {
+        match Device::new(
+            &mut kms.session,
+            path,
+            dev,
+            &self.loop_handle,
+            &mut kms.gpu_manager,
+            kms.primary_node.clone(),
+        ) {
             Ok(mut device) => {
                 tracing::info!("Successfully initialized DRM device: {:?}", drm_node);
-                
+
                 // set primary GPU if not set
                 if kms.primary_gpu.is_none() {
                     kms.primary_gpu = Some(drm_node.clone());
                     *kms.primary_node.write().unwrap() = Some(drm_node.clone());
                     tracing::info!("Setting primary GPU: {:?}", drm_node);
                 }
-                
+
                 // update EGL and add to GPU manager if needed
-                let should_create_dmabuf = if let Err(err) = device.update_egl(kms.primary_gpu.as_ref(), &mut kms.gpu_manager) {
-                    tracing::warn!("Failed to initialize EGL for device {:?}: {}", drm_node, err);
+                let should_create_dmabuf = if let Err(err) =
+                    device.update_egl(kms.primary_gpu.as_ref(), &mut kms.gpu_manager)
+                {
+                    tracing::warn!(
+                        "Failed to initialize EGL for device {:?}: {}",
+                        drm_node,
+                        err
+                    );
                     false
                 } else {
                     device.egl.is_some() && self.dmabuf_global.is_none()
                 };
-                
+
                 // create dmabuf global if needed (do this before scan_outputs to avoid borrow conflicts)
                 if should_create_dmabuf {
                     // extract needed info from device
                     let render_node = device.render_node.clone();
-                    let formats = device.egl.as_ref().unwrap().display.dmabuf_texture_formats();
-                    
+                    let formats = device
+                        .egl
+                        .as_ref()
+                        .unwrap()
+                        .display
+                        .dmabuf_texture_formats();
+
                     // create dmabuf feedback
-                    if let Ok(feedback) = DmabufFeedbackBuilder::new(render_node.dev_id(), formats.clone()).build() {
+                    if let Ok(feedback) =
+                        DmabufFeedbackBuilder::new(render_node.dev_id(), formats.clone()).build()
+                    {
                         // create the global and store it
-                        let global = self.dmabuf_state
-                            .create_global_with_default_feedback::<State>(&self.display_handle, &feedback);
-                        
+                        let global = self
+                            .dmabuf_state
+                            .create_global_with_default_feedback::<State>(
+                                &self.display_handle,
+                                &feedback,
+                            );
+
                         self.dmabuf_global = Some(global);
-                        
+
                         tracing::info!(
                             "Created dmabuf global for device {:?} with {} formats",
                             render_node,
@@ -620,9 +709,15 @@ impl State {
                         tracing::warn!("Failed to create dmabuf feedback");
                     }
                 }
-                
+
                 // scan for connected outputs
-                match device.scan_outputs(&self.display_handle, &self.loop_handle, &mut kms.gpu_manager, self.shell.clone(), self.seat.clone()) {
+                match device.scan_outputs(
+                    &self.display_handle,
+                    &self.loop_handle,
+                    &mut kms.gpu_manager,
+                    self.shell.clone(),
+                    self.seat.clone(),
+                ) {
                     Ok(outputs) => {
                         // add outputs to the shell's space
                         for output in &outputs {
@@ -630,30 +725,32 @@ impl State {
                         }
                         // add outputs to our state
                         self.outputs.extend(outputs.clone());
-                        
+
                         // load virtual output configuration from environment and update
                         {
                             let mut shell = self.shell.write().unwrap();
                             shell.virtual_output_manager.load_config(&self.outputs);
                             shell.virtual_output_manager.update_all(&self.outputs);
-                            
+
                             // ensure all virtual outputs have initial active workspaces
-                            let vout_ids: Vec<_> = shell.virtual_output_manager.all().map(|vo| vo.id).collect();
+                            let vout_ids: Vec<_> =
+                                shell.virtual_output_manager.all().map(|vo| vo.id).collect();
                             for (i, vout_id) in vout_ids.iter().enumerate() {
                                 if let Some(vout) = shell.virtual_output_manager.get(*vout_id) {
                                     if vout.active_workspace().is_none() {
                                         // assign different workspaces to different virtual outputs
                                         let workspace_name = (i + 1).to_string();
-                                        shell.switch_workspace_on_virtual(*vout_id, &workspace_name);
+                                        shell
+                                            .switch_workspace_on_virtual(*vout_id, &workspace_name);
                                     }
                                 }
                             }
                         }
-                        
+
                         // register outputs with output configuration protocol
                         self.output_configuration_state.add_heads(outputs.iter());
                         self.output_configuration_state.update();
-                        
+
                         // schedule initial render for each output
                         for output in outputs {
                             device.schedule_render(&output);
@@ -663,51 +760,59 @@ impl State {
                         tracing::warn!("Failed to scan outputs for device {:?}: {}", drm_node, err);
                     }
                 }
-                
+
                 kms.drm_devices.insert(drm_node, device);
-                
+
                 // update cursor bounds after potential output changes
                 self.update_cursor_bounds();
                 Ok(())
             }
             Err(err) => {
-                tracing::warn!("Failed to initialize DRM device {}: {}", path.display(), err);
+                tracing::warn!(
+                    "Failed to initialize DRM device {}: {}",
+                    path.display(),
+                    err
+                );
                 Ok(()) // non-fatal, might not be a GPU we can use
             }
         }
     }
-    
+
     /// Handle device change (stub for now)
     pub fn device_changed(&mut self, dev: libc::dev_t) -> anyhow::Result<()> {
         tracing::debug!("Device changed: {}", dev);
         // we'll handle this in a later phase
         Ok(())
     }
-    
+
     /// Handle device removal
     pub fn device_removed(&mut self, dev: libc::dev_t, _dh: &DisplayHandle) -> anyhow::Result<()> {
         tracing::info!("Device removed: {}", dev);
-        
+
         let BackendData::Kms(kms) = &mut self.backend else {
             return Ok(());
         };
-        
+
         // find and remove the device
         if let Ok(drm_node) = DrmNode::from_dev_id(dev) {
             if let Some(mut device) = kms.drm_devices.shift_remove(&drm_node) {
                 tracing::info!("Removing DRM device: {:?}", drm_node);
-                
+
                 // remove from GPU manager
                 kms.gpu_manager.as_mut().remove_node(&drm_node);
-                
+
                 // remove event source from event loop
                 if let Some(token) = device.event_token.take() {
                     self.loop_handle.remove(token);
                 }
-                
+
                 // update virtual outputs after device removal
-                self.shell.write().unwrap().virtual_output_manager.update_all(&self.outputs);
-                
+                self.shell
+                    .write()
+                    .unwrap()
+                    .virtual_output_manager
+                    .update_all(&self.outputs);
+
                 // if this was the primary GPU, try to find another
                 if kms.primary_gpu.as_ref() == Some(&drm_node) {
                     kms.primary_gpu = kms.drm_devices.keys().next().cloned();
@@ -717,8 +822,7 @@ impl State {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
 }

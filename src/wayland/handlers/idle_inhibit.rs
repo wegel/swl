@@ -2,8 +2,7 @@
 
 use crate::state::State;
 use smithay::{
-    delegate_idle_inhibit,
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    delegate_idle_inhibit, reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::idle_inhibit::IdleInhibitHandler,
 };
 use std::collections::HashSet;
@@ -19,7 +18,7 @@ impl IdleInhibitState {
             inhibiting_surfaces: HashSet::new(),
         }
     }
-    
+
     pub fn is_inhibited(&self) -> bool {
         !self.inhibiting_surfaces.is_empty()
     }

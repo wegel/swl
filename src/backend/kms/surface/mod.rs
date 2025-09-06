@@ -6,28 +6,26 @@ use anyhow::{Context, Result};
 use smithay::{
     backend::{
         allocator::{
-            gbm::{GbmAllocator, GbmDevice},
             format::FormatSet,
+            gbm::{GbmAllocator, GbmDevice},
             Fourcc,
         },
         drm::{
-            compositor::FrameFlags,
-            exporter::gbm::GbmFramebufferExporter,
-            output::DrmOutput,
-            DrmDeviceFd, DrmNode, DrmEventMetadata, DrmEventTime, VrrSupport,
+            compositor::FrameFlags, exporter::gbm::GbmFramebufferExporter, output::DrmOutput,
+            DrmDeviceFd, DrmEventMetadata, DrmEventTime, DrmNode, VrrSupport,
         },
         egl::EGLContext,
         renderer::{
-            damage::{OutputDamageTracker, Error as RenderError},
+            damage::{Error as RenderError, OutputDamageTracker},
             element::{
                 texture::{TextureRenderBuffer, TextureRenderElement},
-                utils::{RelocateRenderElement, Relocate},
+                utils::{Relocate, RelocateRenderElement},
                 Kind, RenderElementStates,
             },
-            glow::GlowRenderer,
             gles::GlesTexture,
+            glow::GlowRenderer,
             multigpu::GpuManager,
-            Bind, Renderer, Offscreen, Texture,
+            Bind, Offscreen, Renderer, Texture,
         },
     },
     desktop::utils::OutputPresentationFeedback,
@@ -35,7 +33,7 @@ use smithay::{
     reexports::{
         calloop::{
             channel::{channel, Channel, Event, Sender},
-            timer::{Timer, TimeoutAction},
+            timer::{TimeoutAction, Timer},
             LoopHandle, RegistrationToken,
         },
         drm::control::{connector, crtc},
@@ -44,6 +42,7 @@ use smithay::{
     wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
 
+use self::timings::Timings;
 use crate::{
     backend::render::{
         cursor,
@@ -52,7 +51,6 @@ use crate::{
     },
     shell::Shell,
 };
-use self::timings::Timings;
 use std::{
     collections::HashMap,
     sync::{
@@ -68,7 +66,7 @@ use tracing::{debug, error, info, trace, warn};
 pub type GbmDrmOutput = DrmOutput<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
-    Option<OutputPresentationFeedback>,  // presentation feedback for frame timing
+    Option<OutputPresentationFeedback>, // presentation feedback for frame timing
     DrmDeviceFd,
 >;
 
@@ -94,9 +92,7 @@ impl Default for AdaptiveSync {
 #[allow(dead_code)] // variants will be used when we connect the render loop
 pub enum ThreadCommand {
     /// Resume rendering with the given compositor
-    Resume {
-        compositor: GbmDrmOutput,
-    },
+    Resume { compositor: GbmDrmOutput },
     /// Add a GPU node for rendering
     NodeAdded {
         node: DrmNode,
@@ -104,9 +100,7 @@ pub enum ThreadCommand {
         egl: EGLContext,
     },
     /// Remove a GPU node
-    NodeRemoved {
-        node: DrmNode,
-    },
+    NodeRemoved { node: DrmNode },
     /// Schedule a render frame
     ScheduleRender,
     /// Mark structural changes (windows added/removed/moved)
@@ -143,30 +137,24 @@ struct PostprocessState {
 
 impl PostprocessState {
     /// Create a new PostprocessState with offscreen texture
-    fn new_with_renderer<R>(
-        renderer: &mut R,
-        format: Fourcc,
-        output: &Output,
-    ) -> Result<Self>
+    fn new_with_renderer<R>(renderer: &mut R, format: Fourcc, output: &Output) -> Result<Self>
     where
         R: AsGlowRenderer + Offscreen<GlesTexture>,
     {
-        let mode = output.current_mode()
+        let mode = output
+            .current_mode()
             .ok_or_else(|| anyhow::anyhow!("Output has no mode"))?;
-        
+
         let size = mode.size;
         let scale = output.current_scale().integer_scale();
         let transform = output.current_transform();
         let buffer_size = size.to_logical(1).to_buffer(1, Transform::Normal);
         let opaque_regions = vec![Rectangle::from_size(buffer_size)];
-        
+
         // create offscreen texture
-        let texture = Offscreen::<GlesTexture>::create_buffer(
-            renderer,
-            format,
-            buffer_size,
-        ).map_err(|e| anyhow::anyhow!("Failed to create buffer: {:?}", e))?;
-        
+        let texture = Offscreen::<GlesTexture>::create_buffer(renderer, format, buffer_size)
+            .map_err(|e| anyhow::anyhow!("Failed to create buffer: {:?}", e))?;
+
         // create texture render buffer
         let texture_buffer = TextureRenderBuffer::from_texture(
             renderer.glow_renderer(),
@@ -175,14 +163,14 @@ impl PostprocessState {
             transform,
             Some(opaque_regions),
         );
-        
+
         // create damage tracker (without output transform to match texture)
         let damage_tracker = OutputDamageTracker::new(
             size,
             output.current_scale().fractional_scale(),
-            Transform::Normal,  // no transform for offscreen buffer
+            Transform::Normal, // no transform for offscreen buffer
         );
-        
+
         Ok(PostprocessState {
             texture: texture_buffer,
             damage_tracker,
@@ -217,9 +205,7 @@ pub enum QueueState {
     /// A render is queued
     Queued(RegistrationToken),
     /// Waiting for VBlank
-    WaitingForVBlank {
-        redraw_needed: bool,
-    },
+    WaitingForVBlank { redraw_needed: bool },
     /// We did not submit anything to KMS and made a timer to fire at the estimated VBlank
     WaitingForEstimatedVBlank(RegistrationToken),
     /// A redraw is queued on top of the above
@@ -244,36 +230,36 @@ struct SurfaceThreadState {
     target_node: DrmNode,
     active: Arc<AtomicBool>,
     compositor: Option<GbmDrmOutput>,
-    
+
     // offscreen rendering and damage tracking
     postprocess: Option<PostprocessState>,
     last_frame_damage: Option<Vec<Rectangle<i32, smithay::utils::Buffer>>>,
-    frame_count: u32,  // track frame count for buffer age
-    
+    frame_count: u32, // track frame count for buffer age
+
     // scheduling
     state: QueueState,
     thread_sender: Sender<SurfaceCommand>,
     timings: Timings,
-    
+
     // adaptive sync
     vrr_mode: AdaptiveSync,
-    
+
     // output info
     output: Output,
-    
+
     // shell reference for element collection
     shell: Arc<RwLock<Shell>>,
-    
+
     // seat for cursor state access
     seat: smithay::input::Seat<crate::State>,
-    
+
     // event loop
     loop_handle: LoopHandle<'static, Self>,
     clock: Clock<Monotonic>,
-    
+
     // frame callback sequence number to prevent empty-damage commit busy loops
     frame_callback_seq: usize,
-    
+
     // render frequency tracking
     render_count: u32,
     last_freq_log: std::time::Instant,
@@ -295,7 +281,7 @@ pub struct Surface {
     pub output: Output,
     pub primary_plane_formats: FormatSet,
     pub dmabuf_feedback: Option<SurfaceDmabufFeedback>,
-    
+
     // threading support
     active: Arc<AtomicBool>,
     thread_command: Sender<ThreadCommand>,
@@ -313,17 +299,21 @@ impl Surface {
         shell: Arc<RwLock<Shell>>,
         seat: smithay::input::Seat<crate::State>,
     ) -> Result<Self> {
-        info!("Creating surface for output {} on CRTC {:?}", output.name(), crtc);
-        
+        info!(
+            "Creating surface for output {} on CRTC {:?}",
+            output.name(),
+            crtc
+        );
+
         // create channels for thread communication
         let (tx, rx) = channel::<ThreadCommand>();
         let (tx2, rx2) = channel::<SurfaceCommand>();
         let active = Arc::new(AtomicBool::new(false));
-        
+
         let active_clone = active.clone();
         let output_clone = output.clone();
         let shell_clone = shell.clone();
-        
+
         // spawn the render thread
         std::thread::Builder::new()
             .name(format!("surface-{}", output.name()))
@@ -342,7 +332,7 @@ impl Surface {
                 }
             })
             .context("Failed to spawn surface thread")?;
-        
+
         // register channel to receive commands from surface thread
         let output_for_handler = output.clone();
         let thread_token = event_loop
@@ -358,7 +348,7 @@ impl Surface {
                 Event::Closed => {}
             })
             .map_err(|_| anyhow::anyhow!("Failed to establish channel to surface thread"))?;
-        
+
         Ok(Self {
             connector,
             crtc,
@@ -370,45 +360,58 @@ impl Surface {
             thread_token,
         })
     }
-    
+
     /// Schedule a render for this surface
     pub fn schedule_render(&self) {
         // info!("[SCHEDULE] schedule_render called for {}", self.output.name());
         let _ = self.thread_command.send(ThreadCommand::ScheduleRender);
     }
-    
-    
+
     /// Resume the surface with a compositor
     pub fn resume(&self, compositor: GbmDrmOutput) {
         info!("Resuming surface for output {}", self.output.name());
         self.active.store(true, Ordering::SeqCst);
-        let _ = self.thread_command.send(ThreadCommand::Resume { compositor });
+        let _ = self
+            .thread_command
+            .send(ThreadCommand::Resume { compositor });
     }
-    
+
     /// Handle VBlank event
     #[allow(dead_code)] // will be used for vblank handling
     pub fn on_vblank(&self, metadata: Option<DrmEventMetadata>) {
         let _ = self.thread_command.send(ThreadCommand::VBlank(metadata));
     }
-    
+
     /// Check if the surface is active
     #[allow(dead_code)] // will be used for state queries
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
     }
-    
+
     /// Add a GPU node to the surface thread
     pub fn add_node(&self, node: DrmNode, gbm: GbmAllocator<DrmDeviceFd>, egl: EGLContext) {
-        info!("Adding GPU node {:?} to surface {}", node, self.output.name());
-        let _ = self.thread_command.send(ThreadCommand::NodeAdded { node, gbm, egl });
+        info!(
+            "Adding GPU node {:?} to surface {}",
+            node,
+            self.output.name()
+        );
+        let _ = self
+            .thread_command
+            .send(ThreadCommand::NodeAdded { node, gbm, egl });
     }
-    
+
     /// Remove a GPU node from the surface thread
     pub fn remove_node(&self, node: DrmNode) {
-        info!("Removing GPU node {:?} from surface {}", node, self.output.name());
-        let _ = self.thread_command.send(ThreadCommand::NodeRemoved { node });
+        info!(
+            "Removing GPU node {:?} from surface {}",
+            node,
+            self.output.name()
+        );
+        let _ = self
+            .thread_command
+            .send(ThreadCommand::NodeRemoved { node });
     }
-    
+
     /// Check if adaptive sync (VRR) is supported on this output
     // currently unused but may be exposed to clients in the future
     #[allow(dead_code)]
@@ -419,7 +422,7 @@ impl Surface {
             .send(ThreadCommand::AdaptiveSyncAvailable(tx));
         rx.recv().context("Surface thread died")?
     }
-    
+
     /// Set adaptive sync mode for this surface
     // currently unused but may be exposed for runtime VRR mode changes
     #[allow(dead_code)]
@@ -428,24 +431,24 @@ impl Surface {
             .thread_command
             .send(ThreadCommand::UseAdaptiveSync(vrr));
     }
-    
+
     /// Update dmabuf feedback based on current formats
     #[allow(dead_code)] // will be used for dmabuf optimization
     pub fn update_dmabuf_feedback(&mut self, render_node: DrmNode, render_formats: FormatSet) {
         // simplified dmabuf feedback - just basic render and scanout tranches
         // could have more sophisticated logic for multi-gpu scenarios
-        
+
         let builder = DmabufFeedbackBuilder::new(render_node.dev_id(), render_formats.clone());
-        
+
         // build basic render feedback
         let render_feedback = builder.clone().build().unwrap();
-        
+
         // build scanout feedback with primary plane formats if available
         let scanout_feedback = if !self.primary_plane_formats.iter().next().is_none() {
             builder
                 .add_preference_tranche(
                     render_node.dev_id(),
-                    None,  // no specific flags for now
+                    None, // no specific flags for now
                     self.primary_plane_formats.clone(),
                 )
                 .build()
@@ -453,7 +456,7 @@ impl Surface {
         } else {
             render_feedback.clone()
         };
-        
+
         self.dmabuf_feedback = Some(SurfaceDmabufFeedback {
             render_feedback,
             scanout_feedback,
@@ -479,7 +482,7 @@ impl SurfaceManager {
             surfaces: HashMap::new(),
         }
     }
-    
+
     /// Create a surface for an output
     pub fn create_surface(
         &mut self,
@@ -492,40 +495,48 @@ impl SurfaceManager {
         shell: Arc<RwLock<Shell>>,
         seat: smithay::input::Seat<crate::State>,
     ) -> Result<()> {
-        let surface = Surface::new(output, crtc, connector, primary_node, target_node, event_loop, shell, seat)?;
+        let surface = Surface::new(
+            output,
+            crtc,
+            connector,
+            primary_node,
+            target_node,
+            event_loop,
+            shell,
+            seat,
+        )?;
         self.surfaces.insert(crtc, surface);
         debug!("Surface created for CRTC {:?}", crtc);
         Ok(())
     }
-    
+
     #[allow(dead_code)] // will be used in Phase 2f3+ for surface operations
     pub fn get(&self, crtc: &crtc::Handle) -> Option<&Surface> {
         self.surfaces.get(crtc)
     }
-    
+
     #[allow(dead_code)] // will be used in Phase 2f3+ for surface operations
     pub fn get_mut(&mut self, crtc: &crtc::Handle) -> Option<&mut Surface> {
         self.surfaces.get_mut(crtc)
     }
-    
+
     #[allow(dead_code)] // will be used for output hotplug
     pub fn remove(&mut self, crtc: &crtc::Handle) -> Option<Surface> {
         self.surfaces.remove(crtc)
     }
-    
+
     /// Get all surfaces displaying the given output
     pub fn surfaces_for_output(&self, output: &Output) -> impl Iterator<Item = &Surface> {
-        self.surfaces.values()
-            .filter(move |s| &s.output == output)
+        self.surfaces.values().filter(move |s| &s.output == output)
     }
-    
+
     /// Forward VBlank event to the appropriate surface
     pub fn on_vblank(&self, crtc: crtc::Handle, metadata: Option<DrmEventMetadata>) {
         if let Some(surface) = self.surfaces.get(&crtc) {
             surface.on_vblank(metadata);
         }
     }
-    
+
     /// Update GPU nodes for all surfaces
     pub fn update_surface_nodes(
         &mut self,
@@ -534,9 +545,9 @@ impl SurfaceManager {
         egl: &crate::backend::kms::device::EGLInternals,
         add: bool,
     ) -> Result<()> {
+        use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags};
         use smithay::backend::egl::{context::ContextPriority, EGLContext};
-        use smithay::backend::allocator::{gbm::{GbmAllocator, GbmBufferFlags}};
-        
+
         for surface in self.surfaces.values_mut() {
             if add {
                 // create a new shared context for this surface
@@ -571,24 +582,24 @@ fn surface_thread(
 ) -> Result<()> {
     let name = output.name();
     info!("Starting surface thread for {}", name);
-    
+
     // create event loop for this thread
     let mut event_loop = smithay::reexports::calloop::EventLoop::try_new()
         .context("Failed to create surface thread event loop")?;
-    
+
     // initialize GPU manager for this thread
     let api = GpuManager::new(crate::backend::render::GbmGlowBackend::new())
         .context("Failed to initialize rendering api")?;
-    
+
     // get stop signal for the event loop
     let signal = event_loop.get_signal();
-    
+
     let clock = Clock::new();
-    
+
     // initialize frame timings (will be properly set in resume())
     // use None initially since we don't have the real DRM mode yet
     let timings = Timings::new(None, None, false, target_node.clone());
-    
+
     let mut state = SurfaceThreadState {
         api,
         primary_node,
@@ -627,7 +638,7 @@ fn surface_thread(
         loop_handle: event_loop.handle(),
         clock,
     };
-    
+
     // register command handler
     event_loop
         .handle()
@@ -679,10 +690,10 @@ fn surface_thread(
             }
         })
         .map_err(|e| anyhow::anyhow!("Failed to insert command source: {}", e))?;
-    
+
     // run the event loop
     event_loop.run(None, &mut state, |_| {})?;
-    
+
     info!("Surface thread for {} ending", name);
     Ok(())
 }
@@ -690,23 +701,28 @@ fn surface_thread(
 impl SurfaceThreadState {
     fn resume(&mut self, compositor: GbmDrmOutput) {
         debug!("Resuming surface {}", self.output.name());
-        
+
         // update refresh interval from actual DRM mode
         let mode = compositor.with_compositor(|c| c.surface().pending_mode());
         // calculate_refresh_rate returns millihertz, so divide by 1000 to get Hz
-        let interval = Duration::from_secs_f64(1000.0 / crate::backend::kms::drm_helpers::calculate_refresh_rate(mode) as f64);
+        let interval = Duration::from_secs_f64(
+            1000.0 / crate::backend::kms::drm_helpers::calculate_refresh_rate(mode) as f64,
+        );
         self.timings.set_refresh_interval(Some(interval));
-        
+
         // set minimum refresh interval (30Hz minimum)
         const _SAFETY_MARGIN: u32 = 2; // magic two frames margin from kwin (unused for now)
         let min_min_refresh_interval = Duration::from_secs_f64(1.0 / 30.0); // 30Hz
-        self.timings.set_min_refresh_interval(Some(min_min_refresh_interval));
-        
+        self.timings
+            .set_min_refresh_interval(Some(min_min_refresh_interval));
+
         // check VRR support on this output
-        let vrr_support = compositor.with_compositor(|c| {
-            c.vrr_supported(c.pending_connectors().into_iter().next().unwrap())
-        }).ok();
-        
+        let vrr_support = compositor
+            .with_compositor(|c| {
+                c.vrr_supported(c.pending_connectors().into_iter().next().unwrap())
+            })
+            .ok();
+
         // store VRR support in output user data
         if let Some(support) = vrr_support {
             debug!("VRR support for {}: {:?}", self.output.name(), support);
@@ -715,11 +731,11 @@ impl SurfaceThreadState {
         } else {
             debug!("VRR not supported on {}", self.output.name());
         }
-        
+
         // create PostprocessState if not already done
         if self.postprocess.is_none() && self.output.current_mode().is_some() {
             let format = compositor.format();
-            
+
             // get renderer for creating postprocess state
             match self.api.single_renderer(&self.target_node) {
                 Ok(mut renderer) => {
@@ -738,13 +754,16 @@ impl SurfaceThreadState {
                 }
             }
         }
-        
+
         self.compositor = Some(compositor);
-        debug!("Surface {} calling queue_redraw for initial render", self.output.name());
+        debug!(
+            "Surface {} calling queue_redraw for initial render",
+            self.output.name()
+        );
         self.queue_redraw();
         debug!("Surface {} resume complete", self.output.name());
     }
-    
+
     /// Select the appropriate render node for the output
     /// simplified version - just uses primary or target node
     #[allow(dead_code)] // used in redraw method
@@ -753,21 +772,21 @@ impl SurfaceThreadState {
         // the primary node is for DRM operations, not rendering
         self.target_node
     }
-    
+
     /// check if we can use direct rendering (bypass offscreen)
     fn can_use_direct_render(&self) -> bool {
         // enable direct rendering when conditions are met
         // direct rendering is possible when:
         // 1. No screen filters active (we don't have any yet)
-        // 2. No output mirroring (we don't support mirroring yet)  
+        // 2. No output mirroring (we don't support mirroring yet)
         // 3. No transform/scaling mismatch (not implemented)
         // 4. Simple rendering scenario
-        
+
         // enable direct rendering for Phase 5a
         // this will give us proper buffer age from the DRM swapchain
         true
     }
-    
+
     /// check if elements can use hardware planes
     // will be used in Phase 4i: Hardware Plane Optimization
     #[allow(dead_code)]
@@ -777,7 +796,7 @@ impl SurfaceThreadState {
         // For now, everything goes to primary plane (rendered)
         vec![]
     }
-    
+
     /// check if we can do direct scanout (fullscreen bypass)
     // will be used in Phase 4i: Hardware Plane Optimization
     #[allow(dead_code)]
@@ -786,7 +805,7 @@ impl SurfaceThreadState {
         // TODO: Check if single fullscreen element with compatible buffer
         false
     }
-    
+
     /// check and enable VRR if supported
     // will be used for dynamic VRR updates
     #[allow(dead_code)]
@@ -796,25 +815,29 @@ impl SurfaceThreadState {
             if let Err(e) = compositor.with_compositor(|c| c.use_vrr(enable)) {
                 debug!("VRR update failed: {:?}", e);
             } else {
-                debug!("VRR {} for output {}", 
+                debug!(
+                    "VRR {} for output {}",
                     if enable { "enabled" } else { "disabled" },
-                    self.output.name());
+                    self.output.name()
+                );
             }
         }
     }
-    
+
     fn queue_redraw(&mut self) {
         // info!("[QUEUE_REDRAW] called for {}", self.output.name());
         self.queue_redraw_force(false);
     }
-    
+
     fn queue_redraw_force(&mut self, force: bool) {
         let Some(_compositor) = self.compositor.as_mut() else {
-            debug!("No compositor for {}, skipping queue_redraw", self.output.name());
+            debug!(
+                "No compositor for {}, skipping queue_redraw",
+                self.output.name()
+            );
             return;
         };
-        
-        
+
         if let QueueState::WaitingForVBlank { .. } = &self.state {
             // we're waiting for VBlank, request a redraw afterwards.
             // this is the only time we should set redraw_needed to true
@@ -824,13 +847,13 @@ impl SurfaceThreadState {
             // debug!("Setting redraw_needed=true for {} (waiting for VBlank)", self.output.name());
             return;
         }
-        
+
         if !force {
             match &self.state {
                 QueueState::Idle | QueueState::WaitingForEstimatedVBlank(_) => {
                     // debug!("{}: State allows scheduling (Idle or WaitingForEstimatedVBlank)", self.output.name());
                 }
-                
+
                 // a redraw is already queued.
                 QueueState::Queued(_) | QueueState::WaitingForEstimatedVBlankAndQueued { .. } => {
                     //debug!("{}: Skipping - redraw already queued", self.output.name());
@@ -838,13 +861,13 @@ impl SurfaceThreadState {
                 }
                 _ => {
                     debug!("{}: Unknown state, continuing", self.output.name());
-                },
+                }
             };
         }
-        
+
         let estimated_presentation = self.timings.next_presentation_time(&self.clock);
         let render_start = self.timings.next_render_time(&self.clock);
-        
+
         let timer = if render_start.is_zero() {
             // debug!("{}: Running late for frame, using immediate timer", self.output.name());
             Timer::immediate()
@@ -852,7 +875,7 @@ impl SurfaceThreadState {
             // debug!("{}: Scheduling render in {:?}", self.output.name(), render_start);
             Timer::from_duration(render_start)
         };
-        
+
         let token = self
             .loop_handle
             .insert_source(timer, move |_time, _, state| {
@@ -868,7 +891,7 @@ impl SurfaceThreadState {
                 TimeoutAction::Drop
             })
             .expect("Failed to schedule render");
-        
+
         match &self.state {
             QueueState::Idle => {
                 self.state = QueueState::Queued(token);
@@ -893,10 +916,10 @@ impl SurfaceThreadState {
                     queued_render: token,
                 };
             }
-            _ => {},
+            _ => {}
         }
     }
-    
+
     fn on_vblank(&mut self, metadata: Option<DrmEventMetadata>) {
         // info!("[VBLANK] received for {}", self.output.name());
         let Some(compositor) = self.compositor.as_mut() else {
@@ -906,35 +929,38 @@ impl SurfaceThreadState {
             // can happen right after resume
             return;
         }
-        
+
         let now = self.clock.now();
         let presentation_time = match metadata.as_ref().map(|data| &data.time) {
             Some(DrmEventTime::Monotonic(tp)) => Some(tp.clone()),
             _ => None,
         };
-        
+
         // mark last frame completed and send presentation feedback
         if let Ok(Some(feedback)) = compositor.frame_submitted() {
             let clock = if let Some(tp) = presentation_time {
-                tp.into()  // convert Duration to Time<Monotonic>
+                tp.into() // convert Duration to Time<Monotonic>
             } else {
                 now
             };
-            
+
             // send presentation feedback to clients if available
             if let Some(mut feedback) = feedback {
                 // get refresh interval from output mode
                 use smithay::wayland::presentation::Refresh;
-                let refresh = self.output.current_mode()
+                let refresh = self
+                    .output
+                    .current_mode()
                     .map(|mode| {
                         let duration = Duration::from_secs_f64(1.0 / mode.refresh as f64 * 1000.0);
                         Refresh::Fixed(duration)
                     })
                     .unwrap_or(Refresh::Fixed(Duration::from_millis(16)));
-                
+
                 // get sequence number from metadata
                 // note: Often 0 if DRM driver doesn't provide frame counter
-                let sequence = metadata.as_ref()
+                let sequence = metadata
+                    .as_ref()
                     .map(|m| {
                         // debug!("VBlank metadata: sequence={}, time={:?}", m.sequence, m.time);
                         m.sequence
@@ -943,18 +969,18 @@ impl SurfaceThreadState {
                         // debug!("No VBlank metadata available");
                         0
                     }) as u64;
-                
+
                 // presentation flags - vsync, hardware completion
                 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
-                let flags = wp_presentation_feedback::Kind::Vsync | 
-                           wp_presentation_feedback::Kind::HwCompletion;
-                
+                let flags = wp_presentation_feedback::Kind::Vsync
+                    | wp_presentation_feedback::Kind::HwCompletion;
+
                 feedback.presented(clock, refresh, sequence, flags);
             }
-            
+
             self.timings.presented(clock);
         }
-        
+
         // extract redraw_needed from current state and transition to Idle
         let redraw_needed = match std::mem::replace(&mut self.state, QueueState::Idle) {
             QueueState::WaitingForVBlank { redraw_needed } => redraw_needed,
@@ -962,43 +988,45 @@ impl SurfaceThreadState {
                 self.loop_handle.remove(token);
                 false
             }
-            QueueState::WaitingForEstimatedVBlankAndQueued { estimated_vblank, queued_render } => {
+            QueueState::WaitingForEstimatedVBlankAndQueued {
+                estimated_vblank,
+                queued_render,
+            } => {
                 self.loop_handle.remove(estimated_vblank);
                 self.state = QueueState::Queued(queued_render);
                 return;
             }
             _ => false,
         };
-        
+
         self.frame_count = self.frame_count.saturating_add(1);
-        
+
         // check if we need to continue rendering
         // only redraw if explicitly needed or if there are ongoing animations
         let needs_render = {
             let shell = self.shell.read().unwrap();
             redraw_needed || shell.animations_going()
         };
-        
+
         if needs_render {
             self.queue_redraw();
         }
-        
+
         // note: frame callbacks are already sent in redraw() when we successfully queue_frame
         // or in on_estimated_vblank() when we don't render
     }
-    
+
     /// Send frame callbacks to all windows on this output
     /// This allows clients to continue their animations (like cursor blinking)
     fn send_frame_callbacks(&mut self) {
         use smithay::desktop::utils::send_frames_surface_tree;
-        
+
         let clock = self.clock.now();
         let output = &self.output;
-        
+
         // increment sequence to prevent empty-damage commit busy loops
         self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
-        
-        
+
         // send frame callbacks to all windows (including their popups) on this output
         let shell = self.shell.read().unwrap();
         for window in shell.space.elements() {
@@ -1006,11 +1034,11 @@ impl SurfaceThreadState {
                 output,
                 clock,
                 None,
-                |_, _| Some(output.clone()),  // always send for now
+                |_, _| Some(output.clone()), // always send for now
             );
         }
-        drop(shell);  // release the read lock
-        
+        drop(shell); // release the read lock
+
         // send frame callbacks to layer surfaces on this output
         let layer_map = smithay::desktop::layer_map_for_output(output);
         for layer_surface in layer_map.layers() {
@@ -1019,11 +1047,11 @@ impl SurfaceThreadState {
                 output,
                 clock,
                 None,
-                |_, _| Some(output.clone()),  // always send for now
+                |_, _| Some(output.clone()), // always send for now
             );
         }
     }
-    
+
     /// Perform a redraw with damage tracking using PostprocessState
     fn redraw(&mut self, _estimated_presentation: Duration) -> Result<()> {
         // increment render counter and check if we should log frequency
@@ -1032,95 +1060,105 @@ impl SurfaceThreadState {
         if now.duration_since(self.last_freq_log) >= Duration::from_secs(1) {
             let elapsed_secs = now.duration_since(self.last_freq_log).as_secs_f64();
             let freq = self.render_count as f64 / elapsed_secs;
-            info!("[RENDER_FREQ] {} renders/sec for output {}", freq.round(), self.output.name());
+            info!(
+                "[RENDER_FREQ] {} renders/sec for output {}",
+                freq.round(),
+                self.output.name()
+            );
             self.render_count = 0;
             self.last_freq_log = now;
         }
-        
+
         // check we have a compositor first
         if self.compositor.is_none() {
             debug!("No compositor for {}, skipping redraw", self.output.name());
             return Ok(());
         }
-        
+
         // check we have postprocess state (only if not using direct render)
         // decide between direct and offscreen rendering
         let use_direct_render = self.can_use_direct_render();
-        
+
         if !use_direct_render && self.postprocess.is_none() {
             error!("No postprocess state for output {}", self.output.name());
             return Ok(());
         }
-        
+
         // collect render elements from the shell
         // get appropriate renderer before borrowing shell
         let format = self.compositor.as_ref().unwrap().format();
         let render_node = self.render_node_for_output();
-        
+
         // get appropriate renderer
         let mut renderer = if render_node != self.target_node {
             // multi-gpu case
-            self.api.renderer(&render_node, &self.target_node, format)
+            self.api
+                .renderer(&render_node, &self.target_node, format)
                 .map_err(|e| anyhow::anyhow!("Failed to get multi-gpu renderer: {}", e))?
         } else {
             // single-gpu case
-            self.api.single_renderer(&self.target_node)
+            self.api
+                .single_renderer(&self.target_node)
                 .map_err(|e| anyhow::anyhow!("Failed to get single-gpu renderer: {}", e))?
         };
-        
+
         // check if windows need to be re-arranged before rendering
         {
             let shell = self.shell.write().unwrap();
             // Check if any workspace on this output needs arrangement
             let needs_arrangement = shell.any_workspace_needs_arrange_on_output(&self.output);
-            
+
             if needs_arrangement {
                 drop(shell);
                 let mut shell = self.shell.write().unwrap();
                 shell.arrange_windows_on_output(&self.output);
             }
         }
-        
+
         // collect elements from shell
         let mut elements = {
             let shell = self.shell.read().unwrap();
             shell.render_elements(&self.output, &mut renderer)
         };
-        
+
         // add cursor elements
         // add cursor rendering - software cursor for now
         // TODO: Hardware cursor via DRM planes will be added later in this phase
-        
+
         // get cursor info from shell (which is updated by input handler)
         let (cursor_position, cursor_status) = {
             let shell = self.shell.read().unwrap();
             (shell.cursor_position, shell.cursor_status.clone())
         };
-        
+
         // check if cursor is on this output
         let output_loc = self.output.current_location();
-        let output_size = self.output.current_mode()
+        let output_size = self
+            .output
+            .current_mode()
             .map(|m| Size::from((m.size.w as i32, m.size.h as i32)))
             .unwrap_or_default();
         let output_rect = Rectangle::new(output_loc, output_size);
-        
+
         // for now, only render cursor on the output that contains the cursor hotspot
         // this avoids duplicate cursors when outputs overlap at the same position
         // TODO: once we have proper multi-monitor positioning, check for cursor rect overlap instead
         let cursor_elements = if output_rect.contains(cursor_position.to_i32_round()) {
             // get cursor state from seat user data
-            let cursor_state = self.seat.user_data()
+            let cursor_state = self
+                .seat
+                .user_data()
                 .get::<crate::backend::render::cursor::CursorState>()
                 .unwrap();
             let mut cursor_state_ref = cursor_state.lock().unwrap();
-            
+
             // get current time for animated cursors
             let now = self.clock.now();
-            
+
             // draw cursor (relative to this output)
             let relative_pos = cursor_position - output_loc.to_f64();
             // debug!("Rendering cursor on {} at relative position {:?}", self.output.name(), relative_pos);
-            
+
             cursor::draw_cursor(
                 &mut renderer,
                 &mut *cursor_state_ref,
@@ -1133,9 +1171,9 @@ impl SurfaceThreadState {
             // cursor is not on this output
             Vec::new()
         };
-        
+
         // debug!("Adding {} cursor elements to render for {}", cursor_elements.len(), self.output.name());
-        
+
         // add cursor elements to the element list (at the beginning to avoid opaque region culling)
         // cursor should always be visible regardless of what's beneath it
         for (elem, hotspot) in cursor_elements.into_iter().rev() {
@@ -1147,71 +1185,78 @@ impl SurfaceThreadState {
             );
             // wrap cursor element in SwlElement
             let swl_elem = SwlElement::Cursor(relocated_elem);
-            elements.insert(0, swl_elem);  // insert at beginning
+            elements.insert(0, swl_elem); // insert at beginning
         }
-        
+
         // mark element gathering done
         self.timings.elements_done(&self.clock);
-        
+
         // determine if VRR should be active
         let has_fullscreen = {
             let shell = self.shell.read().unwrap();
             shell.get_fullscreen(&self.output).is_some()
         };
-        
+
         let vrr = match self.vrr_mode {
             AdaptiveSync::Force => true,
             AdaptiveSync::Enabled => has_fullscreen,
             AdaptiveSync::Disabled => false,
         };
-        
+
         // set VRR on compositor before rendering
         if let Some(compositor) = self.compositor.as_mut() {
             if let Err(err) = compositor.with_compositor(|c| c.use_vrr(vrr)) {
                 warn!("Unable to set VRR: {}", err);
             }
         }
-        
+
         // update timings for VRR
         self.timings.set_vrr(vrr);
-        
+
         // choose between direct and offscreen rendering
         if use_direct_render {
             // direct rendering path - render directly to DRM framebuffer
             // debug!("[DIRECT] Starting render for {} (VRR={})", self.output.name(), vrr);
-            
+
             // render directly to the DRM compositor's framebuffer
             // this gives us proper buffer age from the swapchain
-            
-            let frame_result = self.compositor.as_mut().unwrap().render_frame(
-                &mut renderer,
-                &elements,
-                crate::backend::render::CLEAR_COLOR,  // grey background
-                FrameFlags::DEFAULT,  // includes cursor plane scanout
-            ).map_err(|e| anyhow::anyhow!("Failed to render frame: {:?}", e))?;
-            
-            // debug!("[DIRECT] Render result for {}: is_empty={}, cursor_element={:?}, overlay_elements={}", 
-            //        self.output.name(), 
+
+            let frame_result = self
+                .compositor
+                .as_mut()
+                .unwrap()
+                .render_frame(
+                    &mut renderer,
+                    &elements,
+                    crate::backend::render::CLEAR_COLOR, // grey background
+                    FrameFlags::DEFAULT,                 // includes cursor plane scanout
+                )
+                .map_err(|e| anyhow::anyhow!("Failed to render frame: {:?}", e))?;
+
+            // debug!("[DIRECT] Render result for {}: is_empty={}, cursor_element={:?}, overlay_elements={}",
+            //        self.output.name(),
             //        frame_result.is_empty,
             //        frame_result.cursor_element.is_some(),
             //        frame_result.overlay_elements.len());
-            
+
             // mark submission time
             self.timings.submitted_for_presentation(&self.clock);
-            
+
             // extract render states before any other operations
             let render_states = frame_result.states;
-            
+
             // collect presentation feedback if frame is not empty
             let feedback = if !frame_result.is_empty {
-                Some(self.shell.read().unwrap().take_presentation_feedback(
-                    &self.output,
-                    &render_states,
-                ))
+                Some(
+                    self.shell
+                        .read()
+                        .unwrap()
+                        .take_presentation_feedback(&self.output, &render_states),
+                )
             } else {
                 None
             };
-            
+
             // always try to queue the frame, even if empty
             // the compositor will return EmptyFrame error if there's no damage
             match self.compositor.as_mut().unwrap().queue_frame(feedback) {
@@ -1220,29 +1265,35 @@ impl SurfaceThreadState {
                     self.state = QueueState::WaitingForVBlank {
                         redraw_needed: false,
                     };
-                    
+
                     // for direct rendering, we don't have damage tracking yet
                     // TODO: add proper damage tracking with swapchain
                     self.last_frame_damage = None;
-                    
+
                     // send frame callbacks now since we queued a frame
                     self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
                     self.send_frame_callbacks();
-                    
+
                     // send render states back to main thread for fractional scale updates
-                    if let Err(e) = self.thread_sender.send(SurfaceCommand::RenderStates(render_states)) {
+                    if let Err(e) = self
+                        .thread_sender
+                        .send(SurfaceCommand::RenderStates(render_states))
+                    {
                         warn!("Failed to send render states to main thread: {:?}", e);
                     }
-                    
+
                     trace!("Direct frame queued for output {}", self.output.name());
                 }
                 Err(smithay::backend::drm::compositor::FrameError::EmptyFrame) => {
                     // empty frame - use estimated VBlank to maintain frame callbacks
-                    debug!("[DIRECT] Empty frame for output {}, using estimated VBlank", self.output.name());
-                    
+                    debug!(
+                        "[DIRECT] Empty frame for output {}, using estimated VBlank",
+                        self.output.name()
+                    );
+
                     // calculate estimated presentation time
                     let estimated_presentation = self.timings.next_presentation_time(&self.clock);
-                    
+
                     // queue estimated vblank timer to maintain frame timing
                     self.queue_estimated_vblank(
                         estimated_presentation,
@@ -1253,28 +1304,31 @@ impl SurfaceThreadState {
                     return Err(anyhow::anyhow!("Failed to queue frame: {:?}", e));
                 }
             }
-            
+
             return Ok(());
         }
-        
+
         // offscreen rendering path - render to texture first for post-processing
         // debug!("[OFFSCREEN] Starting render for {}", self.output.name());
-        
+
         // render to offscreen texture using PostprocessState
-        // Use the already obtained renderer for texture operations  
+        // Use the already obtained renderer for texture operations
         let postprocess = self.postprocess.as_mut().unwrap();
         let transform = self.output.current_transform();
-        
-        let _damage = postprocess.texture.render()
+
+        let _damage = postprocess
+            .texture
+            .render()
             .draw(|texture| {
                 // bind the texture as our render target
-                let mut fb = renderer.bind(texture)
+                let mut fb = renderer
+                    .bind(texture)
                     .map_err(|e| anyhow::anyhow!("Failed to bind texture: {:?}", e))?;
-                
+
                 // buffer age tells us how many frames ago this buffer was last used
                 // for offscreen textures, we use age 1 (always redraw everything for now)
                 let age = 1; // TODO: track this properly
-                
+
                 // use OutputDamageTracker to render with damage tracking
                 let res = match postprocess.damage_tracker.render_output(
                     &mut renderer,
@@ -1284,24 +1338,28 @@ impl SurfaceThreadState {
                     crate::backend::render::CLEAR_COLOR,
                 ) {
                     Ok(res) => res,
-                    Err(RenderError::Rendering(err)) => return Err(anyhow::anyhow!("Render error: {:?}", err)),
+                    Err(RenderError::Rendering(err)) => {
+                        return Err(anyhow::anyhow!("Render error: {:?}", err))
+                    }
                     Err(RenderError::OutputNoMode(_)) => unreachable!("Output has mode"),
                 };
-                
+
                 // wait for rendering to complete
-                renderer.wait(&res.sync)
+                renderer
+                    .wait(&res.sync)
                     .map_err(|e| anyhow::anyhow!("Failed to wait for sync: {:?}", e))?;
-                
+
                 // unbind the texture
                 std::mem::drop(fb);
-                
+
                 // mark drawing done
                 self.timings.draw_done(&self.clock);
-                
+
                 // return and accumulate damage regions
                 let area = texture.size().to_logical(1, transform);
-                
-                let damage = res.damage
+
+                let damage = res
+                    .damage
                     .cloned()
                     .map(|v| {
                         v.into_iter()
@@ -1309,62 +1367,68 @@ impl SurfaceThreadState {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                    
+
                 // Store damage for next frame
                 self.last_frame_damage = Some(damage.clone());
                 self.frame_count += 1;
-                
+
                 Ok(damage)
             })
             .context("Failed to draw to offscreen render target")?;
-            
-            // NOTE: We can't skip on empty damage yet because we use age 1
-            // which forces full redraw. This will be fixed when we implement
-            // proper buffer age tracking in Phase 2je
-            
+
+        // NOTE: We can't skip on empty damage yet because we use age 1
+        // which forces full redraw. This will be fixed when we implement
+        // proper buffer age tracking in Phase 2je
+
         // composite the offscreen texture to the display
         // Create a texture element from our offscreen buffer
         // This is a simplified version of postprocess_elements()
         let texture_element = TextureRenderElement::from_texture_render_buffer(
-            (0.0, 0.0),  // location at origin
+            (0.0, 0.0), // location at origin
             &postprocess.texture,
-            None,  // no alpha
-            None,  // no src crop
-            None,  // no size override
+            None, // no alpha
+            None, // no src crop
+            None, // no size override
             Kind::Unspecified,
         );
-        
+
         // wrap in SwlElement for proper rendering
-        let postprocess_elements: Vec<SwlElement<GlMultiRenderer>> = vec![
-            SwlElement::Texture(texture_element)
-        ];
-        
+        let postprocess_elements: Vec<SwlElement<GlMultiRenderer>> =
+            vec![SwlElement::Texture(texture_element)];
+
         // use the multi-gpu renderer to present the composited texture
-        let frame_result = self.compositor.as_mut().unwrap().render_frame(
-            &mut renderer,
-            &postprocess_elements,
-            [0.0, 0.0, 0.0, 0.0],  // black background (already rendered in texture)
-            FrameFlags::DEFAULT,  // includes cursor plane scanout
-        ).map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
-        
+        let frame_result = self
+            .compositor
+            .as_mut()
+            .unwrap()
+            .render_frame(
+                &mut renderer,
+                &postprocess_elements,
+                [0.0, 0.0, 0.0, 0.0], // black background (already rendered in texture)
+                FrameFlags::DEFAULT,  // includes cursor plane scanout
+            )
+            .map_err(|e| anyhow::anyhow!("Frame render failed: {:?}", e))?;
+
         // debug!("[OFFSCREEN] Render result for {}: is_empty={}", self.output.name(), frame_result.is_empty);
-        
+
         // mark submission time
         self.timings.submitted_for_presentation(&self.clock);
-        
+
         // extract render states before any other operations
         let render_states = frame_result.states;
-        
+
         // collect presentation feedback if frame is not empty
         let feedback = if !frame_result.is_empty {
-            Some(self.shell.read().unwrap().take_presentation_feedback(
-                &self.output,
-                &render_states,
-            ))
+            Some(
+                self.shell
+                    .read()
+                    .unwrap()
+                    .take_presentation_feedback(&self.output, &render_states),
+            )
         } else {
             None
         };
-        
+
         // always try to queue the frame, even if empty
         // the compositor will return EmptyFrame error if there's no damage
         match self.compositor.as_mut().unwrap().queue_frame(feedback) {
@@ -1373,28 +1437,35 @@ impl SurfaceThreadState {
                 self.state = QueueState::WaitingForVBlank {
                     redraw_needed: false,
                 };
-                
+
                 // send frame callbacks now since we queued a frame
                 self.frame_callback_seq = self.frame_callback_seq.wrapping_add(1);
                 self.send_frame_callbacks();
-                
+
                 // send render states back to main thread for fractional scale updates
-                if let Err(e) = self.thread_sender.send(SurfaceCommand::RenderStates(render_states)) {
+                if let Err(e) = self
+                    .thread_sender
+                    .send(SurfaceCommand::RenderStates(render_states))
+                {
                     warn!("Failed to send render states to main thread: {:?}", e);
                 }
-                
-                trace!("Frame queued for output {}, damage regions: {}", 
-                    self.output.name(), 
-                    self.last_frame_damage.as_ref().map(|d| d.len()).unwrap_or(0)
+
+                trace!(
+                    "Frame queued for output {}, damage regions: {}",
+                    self.output.name(),
+                    self.last_frame_damage
+                        .as_ref()
+                        .map(|d| d.len())
+                        .unwrap_or(0)
                 );
             }
             Err(smithay::backend::drm::compositor::FrameError::EmptyFrame) => {
                 // empty frame - use estimated VBlank to maintain frame callbacks
                 // debug!("[OFFSCREEN] Empty frame for output {}, using estimated VBlank", self.output.name());
-                
+
                 // calculate estimated presentation time
                 let estimated_presentation = self.timings.next_presentation_time(&self.clock);
-                
+
                 // queue estimated vblank timer to maintain frame timing
                 self.queue_estimated_vblank(
                     estimated_presentation,
@@ -1405,10 +1476,10 @@ impl SurfaceThreadState {
                 return Err(anyhow::anyhow!("Failed to queue frame: {:?}", e));
             }
         }
-        
+
         Ok(())
     }
-    
+
     fn node_added(
         &mut self,
         node: DrmNode,
@@ -1416,26 +1487,28 @@ impl SurfaceThreadState {
         egl: EGLContext,
     ) -> Result<()> {
         // create glow renderer from EGL context
-        let renderer = unsafe { GlowRenderer::new(egl) }
-            .context("Failed to create glow renderer")?;
-        
+        let renderer =
+            unsafe { GlowRenderer::new(egl) }.context("Failed to create glow renderer")?;
+
         // add the node to the GPU manager
         self.api.as_mut().add_node(node, gbm, renderer);
-        
+
         Ok(())
     }
-    
+
     fn node_removed(&mut self, node: DrmNode) {
         self.api.as_mut().remove_node(&node);
     }
-    
+
     /// Queue an estimated VBlank timer when we didn't submit to KMS
     /// This maintains frame callback timing without actual rendering
     fn queue_estimated_vblank(&mut self, target_presentation_time: Duration, force: bool) {
         match std::mem::take(&mut self.state) {
             QueueState::Idle => unreachable!("queue_estimated_vblank called in Idle state"),
             QueueState::Queued(_) => (), // render was queued while we were working
-            QueueState::WaitingForVBlank { .. } => unreachable!("queue_estimated_vblank called while waiting for VBlank"),
+            QueueState::WaitingForVBlank { .. } => {
+                unreachable!("queue_estimated_vblank called while waiting for VBlank")
+            }
             QueueState::WaitingForEstimatedVBlank(token)
             | QueueState::WaitingForEstimatedVBlankAndQueued {
                 estimated_vblank: token,
@@ -1456,7 +1529,11 @@ impl SurfaceThreadState {
             duration += self.timings.refresh_interval();
         }
 
-        debug!("Queueing estimated vblank timer to fire in {:?} for {}", duration, self.output.name());
+        debug!(
+            "Queueing estimated vblank timer to fire in {:?} for {}",
+            duration,
+            self.output.name()
+        );
 
         let timer = Timer::from_duration(duration);
         let token = self
@@ -1468,7 +1545,7 @@ impl SurfaceThreadState {
             .unwrap();
         self.state = QueueState::WaitingForEstimatedVBlank(token);
     }
-    
+
     /// Handle estimated VBlank timer firing
     /// Sends frame callbacks and optionally triggers redraw
     fn on_estimated_vblank(&mut self, force: bool) {
@@ -1504,11 +1581,11 @@ impl SurfaceThreadState {
             let shell = self.shell.read().unwrap();
             force || shell.animations_going()
         };
-        
+
         if should_redraw {
             self.queue_redraw();
         }
-        
+
         self.send_frame_callbacks();
     }
 }

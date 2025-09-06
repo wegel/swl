@@ -109,7 +109,7 @@ fn load_icon(theme: &CursorTheme, shape: CursorIcon) -> Result<Vec<Image>, Error
         cursor_file.read_to_end(&mut cursor_data)?;
         return parse_xcursor(&cursor_data).ok_or(Error::Parse);
     }
-    
+
     // try alternative names
     for alt_name in shape.alt_names() {
         if let Some(icon_path) = theme.load_icon(alt_name) {
@@ -119,7 +119,7 @@ fn load_icon(theme: &CursorTheme, shape: CursorIcon) -> Result<Vec<Image>, Error
             return parse_xcursor(&cursor_data).ok_or(Error::Parse);
         }
     }
-    
+
     Err(Error::NoDefaultCursor)
 }
 
@@ -168,10 +168,10 @@ pub type CursorState = Mutex<CursorStateInner>;
 
 pub struct CursorStateInner {
     pub current_cursor: Option<CursorIcon>,
-    
+
     cursor_theme: CursorTheme,
     cursor_size: u32,
-    
+
     cursors: HashMap<CursorIcon, Cursor>,
     pub current_image: Option<Image>,
     image_cache: Vec<(Image, MemoryRenderBuffer)>,
@@ -210,10 +210,10 @@ impl Default for CursorStateInner {
         let (theme, size) = load_cursor_theme();
         CursorStateInner {
             current_cursor: Some(CursorIcon::Default),
-            
+
             cursor_size: size,
             cursor_theme: theme,
-            
+
             cursors: HashMap::new(),
             current_image: None,
             image_cache: Vec::new(),
@@ -238,7 +238,7 @@ where
         CursorImageStatus::Named(named_cursor) => Some(*named_cursor),
         _ => None,
     });
-    
+
     if let Some(current_cursor) = named_cursor {
         let integer_scale = scale.x.max(scale.y).ceil() as u32;
         let frame = cursor_state
