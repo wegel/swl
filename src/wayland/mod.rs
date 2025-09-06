@@ -261,7 +261,7 @@ impl CompositorHandler for State {
             if let Some(output) = output {
                 // Always schedule renders for all commits
                 // This ensures Firefox and other applications that use subsurfaces render correctly
-                // Cosmic-comp also does this, resulting in ~60fps with Firefox, ~2fps with terminals
+                // This results in ~60fps with Firefox, ~2fps with terminals
                 self.backend.schedule_render(&output);
             }
         }

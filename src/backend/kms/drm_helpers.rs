@@ -127,7 +127,7 @@ fn interface_short_name(interface: Interface) -> &'static str {
 
 /// Get EDID information for a connector
 pub fn edid_info(_drm: &mut DrmDevice, _conn: connector::Handle) -> Result<EdidInfo> {
-    // simplified - cosmic-comp reads actual EDID data from kernel
+    // simplified - could read actual EDID data from kernel
     // for now just return dummy data
     Ok(EdidInfo {
         make: None,
@@ -161,12 +161,11 @@ impl EdidInfo {
 
 /// Calculate refresh rate from a DRM mode
 pub fn calculate_refresh_rate(mode: Mode) -> u32 {
-    // using cosmic-comp's implementation
     let htotal = mode.hsync().2 as u32;
     let vtotal = mode.vsync().2 as u32;
     // calculate refresh rate in millihertz (1000 mHz = 1 Hz)
     let refresh = (mode.clock() as u64 * 1000000_u64 / htotal as u64 + vtotal as u64 / 2) / vtotal as u64;
     
-    // simplified - cosmic-comp also handles interlace/dblscan flags
+    // simplified - could also handle interlace/dblscan flags
     refresh as u32
 }

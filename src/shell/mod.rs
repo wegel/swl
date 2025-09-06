@@ -28,7 +28,7 @@ use smithay::{
 };
 use std::collections::HashMap;
 
-use crate::backend::render::element::{AsGlowRenderer, CosmicElement};
+use crate::backend::render::element::{AsGlowRenderer, SwlElement};
 use crate::utils::coordinates::{GlobalPoint, GlobalRect, OutputExt, OutputRelativePoint, SpaceExt, VirtualOutputRelativePoint, VirtualOutputRelativeRect};
 use self::workspace::{Workspace, WorkspaceId};
 use self::virtual_output::{VirtualOutputManager, VirtualOutputId};
@@ -787,7 +787,7 @@ impl Shell {
     }
     
     /// Get render elements for all windows and layer surfaces on the given output
-    pub fn render_elements<R>(&self, output: &Output, renderer: &mut R) -> Vec<CosmicElement<R>>
+    pub fn render_elements<R>(&self, output: &Output, renderer: &mut R) -> Vec<SwlElement<R>>
     where
         R: AsGlowRenderer + Renderer + ImportAll + ImportMem,
         R::TextureId: Clone + 'static,
@@ -822,7 +822,7 @@ impl Shell {
                     
                     elements.extend(
                         surface_elements.into_iter()
-                            .map(|elem| CosmicElement::Surface(elem))
+                            .map(|elem| SwlElement::Surface(elem))
                     );
                 }
             }
@@ -868,7 +868,7 @@ impl Shell {
                                         );
                                         window_elements.extend(
                                             surface_elements.into_iter()
-                                                .map(|elem| CosmicElement::Surface(elem))
+                                                .map(|elem| SwlElement::Surface(elem))
                                         );
                                     }
                                 }
@@ -899,7 +899,7 @@ impl Shell {
                                     //    location, output_relative_location, output_relative_location.as_point().to_physical_precise_round::<_, i32>(output_scale));
                                     window_elements.extend(
                                         surface_elements.into_iter()
-                                            .map(|elem| CosmicElement::Surface(elem))
+                                            .map(|elem| SwlElement::Surface(elem))
                                     );
                                     
                                     // Track focused window rectangle for border rendering
@@ -964,7 +964,7 @@ impl Shell {
                                         1.0,
                                         smithay::backend::renderer::element::Kind::Unspecified,
                                     );
-                                    elements.push(CosmicElement::SolidColor(tab_element));
+                                    elements.push(SwlElement::SolidColor(tab_element));
                                     
                                     // render separator after this tab (except for the last tab)
                                     if i < tiled.len() - 1 {
@@ -983,7 +983,7 @@ impl Shell {
                                             1.0,
                                             smithay::backend::renderer::element::Kind::Unspecified,
                                         );
-                                        elements.push(CosmicElement::SolidColor(sep_element));
+                                        elements.push(SwlElement::SolidColor(sep_element));
                                     }
                                 }
                             }
@@ -1009,7 +1009,7 @@ impl Shell {
                                 1.0,
                                 smithay::backend::renderer::element::Kind::Unspecified,
                             );
-                            elements.push(CosmicElement::SolidColor(border_element));
+                            elements.push(SwlElement::SolidColor(border_element));
                         }
                         
                         // 2. background with unfocused border color for the entire tiling area
@@ -1033,7 +1033,7 @@ impl Shell {
                                     1.0,
                                     smithay::backend::renderer::element::Kind::Unspecified,
                                 );
-                                elements.push(CosmicElement::SolidColor(background_element));
+                                elements.push(SwlElement::SolidColor(background_element));
                             }
                         }
                     }
@@ -1055,7 +1055,7 @@ impl Shell {
                     
                     elements.extend(
                         surface_elements.into_iter()
-                            .map(|elem| CosmicElement::Surface(elem))
+                            .map(|elem| SwlElement::Surface(elem))
                     );
                 }
             }
@@ -1075,7 +1075,7 @@ impl Shell {
                     
                     elements.extend(
                         surface_elements.into_iter()
-                            .map(|elem| CosmicElement::Surface(elem))
+                            .map(|elem| SwlElement::Surface(elem))
                     );
                 }
             }

@@ -178,7 +178,7 @@ impl<R: Renderer> RenderElement<R> for DamageElement {
 /// Simplified render element enum for basic compositor functionality
 /// This will grow as we add more features
 #[allow(dead_code)] // will be used in Phase 2f/2g for rendering
-pub enum CosmicElement<R>
+pub enum SwlElement<R>
 where
     R: AsGlowRenderer + Renderer + ImportAll + ImportMem,
     R::TextureId: 'static,
@@ -195,113 +195,113 @@ where
     SolidColor(SolidColorRenderElement),
 }
 
-impl<R> Element for CosmicElement<R>
+impl<R> Element for SwlElement<R>
 where
     R: AsGlowRenderer + Renderer + ImportAll + ImportMem,
     R::TextureId: 'static,
 {
     fn id(&self) -> &Id {
         match self {
-            CosmicElement::Surface(elem) => elem.id(),
-            CosmicElement::Damage(elem) => elem.id(),
-            CosmicElement::Texture(elem) => elem.id(),
-            CosmicElement::Cursor(elem) => elem.id(),
-            CosmicElement::SolidColor(elem) => elem.id(),
+            SwlElement::Surface(elem) => elem.id(),
+            SwlElement::Damage(elem) => elem.id(),
+            SwlElement::Texture(elem) => elem.id(),
+            SwlElement::Cursor(elem) => elem.id(),
+            SwlElement::SolidColor(elem) => elem.id(),
         }
     }
 
     fn current_commit(&self) -> CommitCounter {
         match self {
-            CosmicElement::Surface(elem) => elem.current_commit(),
-            CosmicElement::Damage(elem) => elem.current_commit(),
-            CosmicElement::Texture(elem) => elem.current_commit(),
-            CosmicElement::Cursor(elem) => elem.current_commit(),
-            CosmicElement::SolidColor(elem) => elem.current_commit(),
+            SwlElement::Surface(elem) => elem.current_commit(),
+            SwlElement::Damage(elem) => elem.current_commit(),
+            SwlElement::Texture(elem) => elem.current_commit(),
+            SwlElement::Cursor(elem) => elem.current_commit(),
+            SwlElement::SolidColor(elem) => elem.current_commit(),
         }
     }
 
     fn src(&self) -> Rectangle<f64, BufferCoords> {
         match self {
-            CosmicElement::Surface(elem) => elem.src(),
-            CosmicElement::Damage(elem) => elem.src(),
-            CosmicElement::Texture(elem) => elem.src(),
-            CosmicElement::Cursor(elem) => elem.src(),
-            CosmicElement::SolidColor(elem) => elem.src(),
+            SwlElement::Surface(elem) => elem.src(),
+            SwlElement::Damage(elem) => elem.src(),
+            SwlElement::Texture(elem) => elem.src(),
+            SwlElement::Cursor(elem) => elem.src(),
+            SwlElement::SolidColor(elem) => elem.src(),
         }
     }
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
         match self {
-            CosmicElement::Surface(elem) => elem.geometry(scale),
-            CosmicElement::Damage(elem) => elem.geometry(scale),
-            CosmicElement::Texture(elem) => elem.geometry(scale),
-            CosmicElement::Cursor(elem) => elem.geometry(scale),
-            CosmicElement::SolidColor(elem) => elem.geometry(scale),
+            SwlElement::Surface(elem) => elem.geometry(scale),
+            SwlElement::Damage(elem) => elem.geometry(scale),
+            SwlElement::Texture(elem) => elem.geometry(scale),
+            SwlElement::Cursor(elem) => elem.geometry(scale),
+            SwlElement::SolidColor(elem) => elem.geometry(scale),
         }
     }
 
     fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
         match self {
-            CosmicElement::Surface(elem) => elem.location(scale),
-            CosmicElement::Damage(elem) => elem.location(scale),
-            CosmicElement::Texture(elem) => elem.location(scale),
-            CosmicElement::Cursor(elem) => elem.location(scale),
-            CosmicElement::SolidColor(elem) => elem.location(scale),
+            SwlElement::Surface(elem) => elem.location(scale),
+            SwlElement::Damage(elem) => elem.location(scale),
+            SwlElement::Texture(elem) => elem.location(scale),
+            SwlElement::Cursor(elem) => elem.location(scale),
+            SwlElement::SolidColor(elem) => elem.location(scale),
         }
     }
 
     fn transform(&self) -> smithay::utils::Transform {
         match self {
-            CosmicElement::Surface(elem) => elem.transform(),
-            CosmicElement::Damage(elem) => elem.transform(),
-            CosmicElement::Texture(elem) => elem.transform(),
-            CosmicElement::Cursor(elem) => elem.transform(),
-            CosmicElement::SolidColor(elem) => elem.transform(),
+            SwlElement::Surface(elem) => elem.transform(),
+            SwlElement::Damage(elem) => elem.transform(),
+            SwlElement::Texture(elem) => elem.transform(),
+            SwlElement::Cursor(elem) => elem.transform(),
+            SwlElement::SolidColor(elem) => elem.transform(),
         }
     }
 
     fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
         match self {
-            CosmicElement::Surface(elem) => elem.damage_since(scale, commit),
-            CosmicElement::Damage(elem) => elem.damage_since(scale, commit),
-            CosmicElement::Texture(elem) => elem.damage_since(scale, commit),
-            CosmicElement::Cursor(elem) => elem.damage_since(scale, commit),
-            CosmicElement::SolidColor(elem) => elem.damage_since(scale, commit),
+            SwlElement::Surface(elem) => elem.damage_since(scale, commit),
+            SwlElement::Damage(elem) => elem.damage_since(scale, commit),
+            SwlElement::Texture(elem) => elem.damage_since(scale, commit),
+            SwlElement::Cursor(elem) => elem.damage_since(scale, commit),
+            SwlElement::SolidColor(elem) => elem.damage_since(scale, commit),
         }
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         match self {
-            CosmicElement::Surface(elem) => elem.opaque_regions(scale),
-            CosmicElement::Damage(elem) => elem.opaque_regions(scale),
-            CosmicElement::Texture(elem) => elem.opaque_regions(scale),
-            CosmicElement::Cursor(elem) => elem.opaque_regions(scale),
-            CosmicElement::SolidColor(elem) => elem.opaque_regions(scale),
+            SwlElement::Surface(elem) => elem.opaque_regions(scale),
+            SwlElement::Damage(elem) => elem.opaque_regions(scale),
+            SwlElement::Texture(elem) => elem.opaque_regions(scale),
+            SwlElement::Cursor(elem) => elem.opaque_regions(scale),
+            SwlElement::SolidColor(elem) => elem.opaque_regions(scale),
         }
     }
 
     fn alpha(&self) -> f32 {
         match self {
-            CosmicElement::Surface(elem) => elem.alpha(),
-            CosmicElement::Damage(elem) => elem.alpha(),
-            CosmicElement::Texture(elem) => elem.alpha(),
-            CosmicElement::Cursor(elem) => elem.alpha(),
-            CosmicElement::SolidColor(elem) => elem.alpha(),
+            SwlElement::Surface(elem) => elem.alpha(),
+            SwlElement::Damage(elem) => elem.alpha(),
+            SwlElement::Texture(elem) => elem.alpha(),
+            SwlElement::Cursor(elem) => elem.alpha(),
+            SwlElement::SolidColor(elem) => elem.alpha(),
         }
     }
 
     fn kind(&self) -> Kind {
         match self {
-            CosmicElement::Surface(elem) => elem.kind(),
-            CosmicElement::Damage(elem) => elem.kind(),
-            CosmicElement::Texture(elem) => elem.kind(),
-            CosmicElement::Cursor(elem) => elem.kind(),
-            CosmicElement::SolidColor(elem) => elem.kind(),
+            SwlElement::Surface(elem) => elem.kind(),
+            SwlElement::Damage(elem) => elem.kind(),
+            SwlElement::Texture(elem) => elem.kind(),
+            SwlElement::Cursor(elem) => elem.kind(),
+            SwlElement::SolidColor(elem) => elem.kind(),
         }
     }
 }
 
-impl<R> RenderElement<R> for CosmicElement<R>
+impl<R> RenderElement<R> for SwlElement<R>
 where
     R: AsGlowRenderer + Renderer + ImportAll + ImportMem,
     R::TextureId: 'static,
@@ -316,9 +316,9 @@ where
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), R::Error> {
         match self {
-            CosmicElement::Surface(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
-            CosmicElement::Damage(elem) => <DamageElement as RenderElement<R>>::draw(elem, frame, src, dst, damage, opaque_regions),
-            CosmicElement::Texture(elem) => <TextureRenderElement<GlesTexture> as RenderElement<GlowRenderer>>::draw(
+            SwlElement::Surface(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
+            SwlElement::Damage(elem) => <DamageElement as RenderElement<R>>::draw(elem, frame, src, dst, damage, opaque_regions),
+            SwlElement::Texture(elem) => <TextureRenderElement<GlesTexture> as RenderElement<GlowRenderer>>::draw(
                 elem,
                 R::glow_frame_mut(frame),
                 src,
@@ -326,8 +326,8 @@ where
                 damage,
                 opaque_regions,
             ).map_err(R::Error::from_gles_error),
-            CosmicElement::Cursor(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
-            CosmicElement::SolidColor(elem) => <SolidColorRenderElement as RenderElement<GlowRenderer>>::draw(
+            SwlElement::Cursor(elem) => elem.draw(frame, src, dst, damage, opaque_regions),
+            SwlElement::SolidColor(elem) => <SolidColorRenderElement as RenderElement<GlowRenderer>>::draw(
                 elem,
                 R::glow_frame_mut(frame),
                 src,
@@ -340,11 +340,11 @@ where
     
     fn underlying_storage(&self, renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
         match self {
-            CosmicElement::Surface(elem) => elem.underlying_storage(renderer),
-            CosmicElement::Damage(_) => None,  // DamageElement has no underlying storage
-            CosmicElement::Texture(_) => None, // TextureRenderElement doesn't provide underlying storage for external renderers
-            CosmicElement::Cursor(elem) => elem.underlying_storage(renderer),
-            CosmicElement::SolidColor(_) => None, // SolidColorRenderElement has no underlying storage
+            SwlElement::Surface(elem) => elem.underlying_storage(renderer),
+            SwlElement::Damage(_) => None,  // DamageElement has no underlying storage
+            SwlElement::Texture(_) => None, // TextureRenderElement doesn't provide underlying storage for external renderers
+            SwlElement::Cursor(elem) => elem.underlying_storage(renderer),
+            SwlElement::SolidColor(_) => None, // SolidColorRenderElement has no underlying storage
         }
     }
 }

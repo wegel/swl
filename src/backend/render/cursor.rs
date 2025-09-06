@@ -1,4 +1,4 @@
-// simplified cursor implementation adapted from cosmic-comp
+// simplified cursor implementation
 
 use smithay::{
     backend::{

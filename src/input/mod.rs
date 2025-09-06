@@ -133,7 +133,7 @@ impl State {
                         },
                     );
                     
-                    // Send frame event after motion (cosmic-comp does this)
+                    // Send frame event after motion
                     pointer.frame(self);
                     
                     // update cursor position in shell (for rendering)
@@ -207,7 +207,7 @@ impl State {
                         },
                     );
                     
-                    // Send frame event after motion (cosmic-comp does this)
+                    // Send frame event after motion
                     pointer.frame(self);
                     
                     // update cursor position in shell (for rendering)
@@ -307,7 +307,7 @@ impl State {
                         },
                     );
                     
-                    // Send frame event after button (cosmic-comp does this)
+                    // Send frame event after button
                     pointer.frame(self);
                 }
             }
@@ -657,7 +657,7 @@ impl State {
                 // Use first output for now (single monitor)
                 if let Some(output) = self.outputs.first() {
                     shell.toggle_fullscreen(output);
-                    // Drop shell lock before scheduling render (following cosmic-comp pattern)
+                    // Drop shell lock before scheduling render
                     std::mem::drop(shell);
                     self.backend.schedule_render(output);
                 }
@@ -904,7 +904,7 @@ impl SeatHandler for State {
     }
     
     fn cursor_image(&mut self, seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
-        // store cursor status in seat user data (following cosmic-comp)
+        // store cursor status in seat user data
         let cursor_status = seat.user_data().get::<std::sync::Mutex<smithay::input::pointer::CursorImageStatus>>().unwrap();
         *cursor_status.lock().unwrap() = image.clone();
         

@@ -38,7 +38,7 @@ use std::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::backend::render::{GlMultiRenderer, element::CosmicElement};
+use crate::backend::render::{GlMultiRenderer, element::SwlElement};
 
 /// EGL context and display for rendering
 #[derive(Debug)]
@@ -207,7 +207,7 @@ impl Device {
                                 // for now, just empty elements - the surface thread will populate them
                                 let elements = smithay::backend::drm::output::DrmOutputRenderElements::<
                                     GlMultiRenderer, 
-                                    CosmicElement<GlMultiRenderer>
+                                    SwlElement<GlMultiRenderer>
                                 >::default();
                                 
                                 // get planes for this CRTC
@@ -557,13 +557,13 @@ fn populate_modes(
     output.set_preferred(output_mode);
 
     // Set initial configuration
-    let scale = 1.0; // simplified - cosmic-comp has complex scale calculation
-    let transform = Transform::Normal; // simplified - cosmic-comp reads panel orientation
+    let scale = 1.0; // simplified - could have more complex scale calculation
+    let transform = Transform::Normal; // simplified - could read panel orientation
     output.change_current_state(
         Some(output_mode),
         Some(transform),
         Some(Scale::Fractional(scale)),
-        Some(Point::from((0, 0))), // global coordinates - simplified, cosmic-comp calculates position
+        Some(Point::from((0, 0))), // global coordinates - simplified position calculation
     );
 
     Ok(())

@@ -346,7 +346,7 @@ impl State {
         seat.add_keyboard(xkb_config, repeat_delay, repeat_rate).unwrap();
         seat.add_pointer();
         
-        // add cursor status to seat user data (following cosmic-comp)
+        // add cursor status to seat user data
         seat.user_data().insert_if_missing_threadsafe(|| {
             Mutex::new(smithay::input::pointer::CursorImageStatus::default_named())
         });

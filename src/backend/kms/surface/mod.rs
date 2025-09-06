@@ -47,7 +47,7 @@ use smithay::{
 use crate::{
     backend::render::{
         cursor,
-        element::{AsGlowRenderer, CosmicElement},
+        element::{AsGlowRenderer, SwlElement},
         GlMultiRenderer,
     },
     shell::Shell,
@@ -130,7 +130,7 @@ pub enum SurfaceCommand {
 }
 
 /// Simplified PostprocessState for offscreen rendering
-/// Based on cosmic-comp's approach but simplified for our needs
+/// Simplified plane assignment helper
 struct PostprocessState {
     texture: TextureRenderBuffer<GlesTexture>,
     damage_tracker: OutputDamageTracker,
@@ -433,7 +433,7 @@ impl Surface {
     #[allow(dead_code)] // will be used for dmabuf optimization
     pub fn update_dmabuf_feedback(&mut self, render_node: DrmNode, render_formats: FormatSet) {
         // simplified dmabuf feedback - just basic render and scanout tranches
-        // cosmic-comp has more sophisticated logic for multi-gpu scenarios
+        // could have more sophisticated logic for multi-gpu scenarios
         
         let builder = DmabufFeedbackBuilder::new(render_node.dev_id(), render_formats.clone());
         
@@ -468,7 +468,7 @@ impl Drop for Surface {
     }
 }
 
-/// Manages surfaces for outputs - simplified version of cosmic-comp's approach
+/// Manages surfaces for outputs - simplified version
 pub struct SurfaceManager {
     surfaces: HashMap<crtc::Handle, Surface>,
 }
@@ -697,7 +697,7 @@ impl SurfaceThreadState {
         let interval = Duration::from_secs_f64(1000.0 / crate::backend::kms::drm_helpers::calculate_refresh_rate(mode) as f64);
         self.timings.set_refresh_interval(Some(interval));
         
-        // set minimum refresh interval (30Hz minimum like cosmic-comp)
+        // set minimum refresh interval (30Hz minimum)
         const _SAFETY_MARGIN: u32 = 2; // magic two frames margin from kwin (unused for now)
         let min_min_refresh_interval = Duration::from_secs_f64(1.0 / 30.0); // 30Hz
         self.timings.set_min_refresh_interval(Some(min_min_refresh_interval));
@@ -771,7 +771,7 @@ impl SurfaceThreadState {
     /// Phase 5c: Check if elements can use hardware planes
     // will be used in Phase 4i: Hardware Plane Optimization
     #[allow(dead_code)]
-    fn assign_planes(&self, _elements: &[CosmicElement<GlMultiRenderer>]) -> Vec<PlaneAssignment> {
+    fn assign_planes(&self, _elements: &[SwlElement<GlMultiRenderer>]) -> Vec<PlaneAssignment> {
         // Phase 5c: Hardware plane support
         // TODO: Query available planes and assign elements to them
         // For now, everything goes to primary plane (rendered)
@@ -781,7 +781,7 @@ impl SurfaceThreadState {
     /// Phase 5e: Check if we can do direct scanout (fullscreen bypass)
     // will be used in Phase 4i: Hardware Plane Optimization
     #[allow(dead_code)]
-    fn can_direct_scanout(&self, _elements: &[CosmicElement<GlMultiRenderer>]) -> bool {
+    fn can_direct_scanout(&self, _elements: &[SwlElement<GlMultiRenderer>]) -> bool {
         // Phase 5e: Direct scanout for fullscreen content
         // TODO: Check if single fullscreen element with compatible buffer
         false
@@ -1087,7 +1087,7 @@ impl SurfaceThreadState {
             shell.render_elements(&self.output, &mut renderer)
         };
         
-        // add cursor elements (following cosmic-comp's approach)
+        // add cursor elements
         // Phase 4f: Add cursor rendering - software cursor for now
         // TODO: Hardware cursor via DRM planes will be added later in this phase
         
@@ -1145,9 +1145,9 @@ impl SurfaceThreadState {
                 (-hotspot.x, -hotspot.y),
                 Relocate::Relative,
             );
-            // wrap cursor element in CosmicElement
-            let cosmic_elem = CosmicElement::Cursor(relocated_elem);
-            elements.insert(0, cosmic_elem);  // insert at beginning
+            // wrap cursor element in SwlElement
+            let swl_elem = SwlElement::Cursor(relocated_elem);
+            elements.insert(0, swl_elem);  // insert at beginning
         }
         
         // mark element gathering done
@@ -1261,7 +1261,6 @@ impl SurfaceThreadState {
         // debug!("[OFFSCREEN] Starting render for {}", self.output.name());
         
         // Phase 2jb: Render to offscreen texture using PostprocessState
-        // This follows cosmic-comp's approach exactly
         // Use the already obtained renderer for texture operations  
         let postprocess = self.postprocess.as_mut().unwrap();
         let transform = self.output.current_transform();
@@ -1325,7 +1324,7 @@ impl SurfaceThreadState {
             
         // Phase 2jc: Composite the offscreen texture to the display
         // Create a texture element from our offscreen buffer
-        // This is a simplified version of cosmic-comp's postprocess_elements()
+        // This is a simplified version of postprocess_elements()
         let texture_element = TextureRenderElement::from_texture_render_buffer(
             (0.0, 0.0),  // location at origin
             &postprocess.texture,
@@ -1335,9 +1334,9 @@ impl SurfaceThreadState {
             Kind::Unspecified,
         );
         
-        // wrap in CosmicElement for proper rendering
-        let postprocess_elements: Vec<CosmicElement<GlMultiRenderer>> = vec![
-            CosmicElement::Texture(texture_element)
+        // wrap in SwlElement for proper rendering
+        let postprocess_elements: Vec<SwlElement<GlMultiRenderer>> = vec![
+            SwlElement::Texture(texture_element)
         ];
         
         // use the multi-gpu renderer to present the composited texture

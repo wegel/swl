@@ -57,7 +57,7 @@ impl Keybinding {
     
     /// Check if this keybinding matches the given modifiers and key
     pub fn matches(&self, modifiers: &ModifiersState, key: Keysym) -> bool {
-        // check for exact modifier match (like cosmic-comp does)
+        // check for exact modifier match
         let mod_match = self.modifiers.ctrl == modifiers.ctrl
             && self.modifiers.alt == modifiers.alt
             && self.modifiers.shift == modifiers.shift

@@ -8,7 +8,7 @@ license = "GPL-3.0-only"
 description = "A minimal tiling Wayland compositor inspired by dwl/dwm"
 
 [dependencies]
-# Core smithay dependency - same commit as cosmic-comp
+# Core smithay dependency
 smithay = { git = "https://github.com/smithay/smithay.git", rev = "20d2dac", default-features = false, features = [
     "wayland_frontend",
     "desktop",
