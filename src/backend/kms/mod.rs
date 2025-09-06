@@ -61,12 +61,12 @@ impl KmsState {
         _global: &DmabufGlobal,
         dmabuf: Dmabuf,
     ) -> Result<DrmNode> {
-        // Find device with EGL support to validate the dmabuf
+        // find device with EGL support to validate the dmabuf
         let mut last_err = anyhow::anyhow!("No device with EGL support found");
         
         for (node, device) in &self.drm_devices {
             if let Some(ref egl) = device.egl {
-                // Check if the format is supported
+                // check if the format is supported
                 if !egl.display.dmabuf_texture_formats().contains(&dmabuf.format()) {
                     trace!(
                         "Skipping import of dmabuf on {:?}: unsupported format {:?}",
@@ -76,10 +76,10 @@ impl KmsState {
                     continue;
                 }
                 
-                // Try to create an EGL image to validate the dmabuf
+                // try to create an EGL image to validate the dmabuf
                 match egl.display.create_image_from_dmabuf(&dmabuf) {
                     Ok(image) => {
-                        // Successfully imported - destroy the test image
+                        // successfully imported - destroy the test image
                         unsafe {
                             smithay::backend::egl::ffi::egl::DestroyImageKHR(
                                 **egl.display.get_display_handle(),
@@ -184,27 +184,27 @@ fn init_libinput(
             InputEvent::DeviceAdded { device } => {
                 info!("Input device added: {}", device.name());
                 
-                // Configure touchpad tap-to-click
+                // configure touchpad tap-to-click
                 if device.config_tap_finger_count() > 0 {
-                    // This is a touchpad
+                    // this is a touchpad
                     info!("Configuring touchpad: {}", device.name());
                     
-                    // Enable tap-to-click
+                    // enable tap-to-click
                     if let Err(e) = device.config_tap_set_enabled(true) {
                         warn!("Failed to enable tap-to-click: {:?}", e);
                     }
                     
-                    // Enable tap-and-drag
+                    // enable tap-and-drag
                     if let Err(e) = device.config_tap_set_drag_enabled(true) {
                         warn!("Failed to enable tap-drag: {:?}", e);
                     }
                     
-                    // Enable drag lock (keep dragging when lifting finger briefly)
+                    // enable drag lock (keep dragging when lifting finger briefly)
                     if let Err(e) = device.config_tap_set_drag_lock_enabled(true) {
                         warn!("Failed to enable tap-drag-lock: {:?}", e);
                     }
                     
-                    // Disable touchpad while typing
+                    // disable touchpad while typing
                     if device.config_dwt_is_available() {
                         if let Err(e) = device.config_dwt_set_enabled(false) {
                             warn!("Failed to disable 'disable-while-typing': {:?}", e);

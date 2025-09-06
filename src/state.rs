@@ -99,7 +99,7 @@ pub struct State {
     pub keybindings: Keybindings,
     session_active: bool,
     pub needs_focus_refresh: bool,
-    // Additional protocol support
+    // additional protocol support
     #[allow(dead_code)]
     pub viewporter_state: ViewporterState,
     #[allow(dead_code)]
@@ -230,14 +230,14 @@ impl OutputConfigurationHandler for State {
         // trigger re-arrangement of windows and update geometry
         let mut shell = self.shell.write().unwrap();
         for output in &self.outputs {
-            // Calculate the proper logical output size accounting for rotation and scale
+            // calculate the proper logical output size accounting for rotation and scale
             let output_size = {
                 use smithay::utils::Transform;
                 let mode = output.current_mode().unwrap();
                 let transform = output.current_transform();
                 let scale = output.current_scale().fractional_scale();
                 
-                // Apply transform first (on physical size), then convert to logical
+                // apply transform first (on physical size), then convert to logical
                 Transform::from(transform)
                     .transform_size(mode.size)
                     .to_f64()
@@ -245,18 +245,18 @@ impl OutputConfigurationHandler for State {
                     .to_i32_round()
             };
             
-            // Get the available area from layer map
+            // get the available area from layer map
             let layer_map = smithay::desktop::layer_map_for_output(output);
             let mut available_area = layer_map.non_exclusive_zone();
             
-            // If layer map returns the full output size, use our calculated size
+            // if layer map returns the full output size, use our calculated size
             // (LayerMap doesn't always handle rotation/scale correctly)
             if available_area.size == output_size || available_area.size == smithay::utils::Size::from((output_size.h, output_size.w)) {
                 available_area = smithay::utils::Rectangle::new(available_area.loc, output_size);
             }
             
             shell.apply_to_all_workspaces_on_output(output, |workspace| {
-                // Update workspace geometry (this will mark needs_arrange if area changed)
+                // update workspace geometry (this will mark needs_arrange if area changed)
                 workspace.update_output_geometry(available_area);
             });
         }
@@ -360,7 +360,7 @@ impl State {
         // using CLOCK_MONOTONIC (id = 1) as the clock
         let presentation_state = PresentationState::new::<State>(&display_handle, 1);
         
-        // Initialize additional protocol support
+        // initialize additional protocol support
         let viewporter_state = ViewporterState::new::<State>(&display_handle);
         let pointer_gestures_state = PointerGesturesState::new::<State>(&display_handle);
         let relative_pointer_manager_state = RelativePointerManagerState::new::<State>(&display_handle);
@@ -479,7 +479,7 @@ impl State {
     pub fn update_primary_output(&self, output: &Output, render_element_states: &RenderElementStates) {
         let shell = self.shell.read().unwrap();
         
-        // Processor function that updates primary output and fractional scale
+        // processor function that updates primary output and fractional scale
         let processor = |surface: &WlSurface, states: &smithay::wayland::compositor::SurfaceData| {
             let primary_scanout_output = update_surface_primary_scanout_output(
                 surface,
@@ -489,7 +489,7 @@ impl State {
                 default_primary_scanout_output_compare,
             );
             
-            // If the primary output changed, update the fractional scale
+            // if the primary output changed, update the fractional scale
             if let Some(output) = primary_scanout_output {
                 with_fractional_scale(states, |fraction_scale| {
                     fraction_scale.set_preferred_scale(output.current_scale().fractional_scale());
@@ -497,20 +497,20 @@ impl State {
             }
         };
         
-        // Process all windows in the space
+        // process all windows in the space
         for window in shell.space.elements() {
             if let Some(toplevel) = window.toplevel() {
                 with_surfaces_surface_tree(toplevel.wl_surface(), processor);
             }
         }
         
-        // Process layer shell surfaces
+        // process layer shell surfaces
         let layer_map = smithay::desktop::layer_map_for_output(output);
         for surface in layer_map.layers() {
             with_surfaces_surface_tree(surface.wl_surface(), processor);
         }
         
-        // Process cursor surfaces  
+        // process cursor surfaces  
         if let Some(pointer) = self.seat.get_pointer() {
             if let Some(surface) = pointer.current_focus() {
                 with_surfaces_surface_tree(&surface, processor);
@@ -597,15 +597,15 @@ impl State {
                     device.egl.is_some() && self.dmabuf_global.is_none()
                 };
                 
-                // Create dmabuf global if needed (do this before scan_outputs to avoid borrow conflicts)
+                // create dmabuf global if needed (do this before scan_outputs to avoid borrow conflicts)
                 if should_create_dmabuf {
-                    // Extract needed info from device
+                    // extract needed info from device
                     let render_node = device.render_node.clone();
                     let formats = device.egl.as_ref().unwrap().display.dmabuf_texture_formats();
                     
-                    // Create dmabuf feedback
+                    // create dmabuf feedback
                     if let Ok(feedback) = DmabufFeedbackBuilder::new(render_node.dev_id(), formats.clone()).build() {
-                        // Create the global and store it
+                        // create the global and store it
                         let global = self.dmabuf_state
                             .create_global_with_default_feedback::<State>(&self.display_handle, &feedback);
                         

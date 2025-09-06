@@ -33,14 +33,14 @@ use crate::utils::coordinates::{GlobalPoint, GlobalRect, OutputExt, OutputRelati
 use self::workspace::{Workspace, WorkspaceId};
 use self::virtual_output::{VirtualOutputManager, VirtualOutputId};
 
-// Window border configuration
+// window border configuration
 pub const BORDER_WIDTH: i32 = 1;
 const FOCUSED_BORDER_COLOR: [f32; 4] = [0.0, 0.5, 1.0, 1.0]; // bright blue
 const UNFOCUSED_BORDER_COLOR: [f32; 4] = [0.0, 0.2, 0.5, 1.0]; // darker blue
 
 /// Determine if a window should float by default
 fn should_float_impl(window: &Window) -> bool {
-    // Check if window is a dialog
+    // check if window is a dialog
     if let Some(toplevel) = window.toplevel() {
         let has_parent = toplevel.parent().is_some();
         
@@ -50,13 +50,13 @@ fn should_float_impl(window: &Window) -> bool {
         );
         
         if has_parent {
-            // Window has a parent, likely a dialog
+            // window has a parent, likely a dialog
             tracing::debug!("Window has parent, floating it");
             return true;
         }
     }
     
-    // Could add more checks here based on window size, app_id, etc.
+    // could add more checks here based on window size, app_id, etc.
     false
 }
 
@@ -141,16 +141,16 @@ impl Shell {
         
         tracing::debug!("Switching virtual output {:?} to workspace '{}'", virtual_id, workspace_name);
         
-        // Check if this workspace is already active on a different virtual output
+        // check if this workspace is already active on a different virtual output
         if let Some(current_owner) = self.find_workspace_owner(workspace_id) {
             if current_owner != virtual_id {
                 tracing::debug!("Workspace '{}' is currently visible on {:?}, will hide from there and show on {:?}", 
                     workspace_name, current_owner, virtual_id);
                 
-                // Find a different workspace for the current owner to switch to
+                // find a different workspace for the current owner to switch to
                 let fallback_workspace = self.find_fallback_workspace_for_virtual_output(current_owner, workspace_id);
                 
-                // Hide windows from the workspace on current owner
+                // hide windows from the workspace on current owner
                 if let Some(workspace) = self.workspaces.get(&workspace_id) {
                     tracing::debug!("Unmapping {} windows from workspace '{}' on {:?}", 
                         workspace.windows.len(), workspace_name, current_owner);
@@ -159,11 +159,11 @@ impl Shell {
                     }
                 }
                 
-                // Switch current owner to fallback workspace
+                // switch current owner to fallback workspace
                 if let Some(current_vout) = self.virtual_output_manager.get_mut(current_owner) {
                     current_vout.set_active_workspace(fallback_workspace);
                     
-                    // Show windows from fallback workspace if any
+                    // show windows from fallback workspace if any
                     if let Some(fallback_id) = fallback_workspace {
                         if let Some(fallback_ws) = self.workspaces.get(&fallback_id) {
                             tracing::debug!("Mapping {} windows for fallback workspace on {:?}", 
@@ -177,11 +177,11 @@ impl Shell {
             }
         }
         
-        // Get current workspace of target virtual output (to potentially unmap it)
+        // get current workspace of target virtual output (to potentially unmap it)
         let old_workspace_id = self.virtual_output_manager.get(virtual_id)
             .and_then(|vout| vout.active_workspace());
             
-        // Hide windows from old workspace
+        // hide windows from old workspace
         if let Some(old_id) = old_workspace_id {
             if let Some(old_workspace) = self.workspaces.get(&old_id) {
                 tracing::debug!("Unmapping {} windows from old workspace", old_workspace.windows.len());
@@ -191,31 +191,31 @@ impl Shell {
             }
         }
         
-        // Assign workspace to virtual output
+        // assign workspace to virtual output
         if let Some(vout) = self.virtual_output_manager.get_mut(virtual_id) {
             vout.set_active_workspace(Some(workspace_id));
             
-            // Update workspace geometry to match virtual output
+            // update workspace geometry to match virtual output
             if let Some(workspace) = self.workspaces.get_mut(&workspace_id) {
                 workspace.update_output_geometry(vout.logical_geometry);
                 workspace.virtual_output_id = Some(virtual_id);
             }
         }
         
-        // Show windows from new workspace
+        // show windows from new workspace
         if let Some(new_workspace) = self.workspaces.get(&workspace_id) {
             tracing::debug!("Mapping {} windows for workspace '{}'", new_workspace.windows.len(), workspace_name);
             for window in &new_workspace.windows {
                 self.space.map_element(window.clone(), (0, 0), false);
             }
             
-            // Mark for arrangement
+            // mark for arrangement
             if let Some(workspace) = self.workspaces.get_mut(&workspace_id) {
                 workspace.needs_arrange = true;
             }
         }
         
-        // Trigger arrangement if we have a physical output
+        // trigger arrangement if we have a physical output
         let physical_output = self.virtual_output_manager.get(virtual_id)
             .and_then(|vout| vout.regions.first())
             .map(|region| region.physical_output.clone());
@@ -227,7 +227,7 @@ impl Shell {
     
     /// Add an output to the shell's space
     pub fn add_output(&mut self, output: &Output) {
-        // Use the output's current configured position instead of hardcoding (0,0)
+        // use the output's current configured position instead of hardcoding (0,0)
         let position = output.current_location_typed();
         self.space.map_output(output, position.as_point());
         
@@ -280,13 +280,13 @@ impl Shell {
     
     /// Find a fallback workspace for a virtual output when its current workspace is claimed
     fn find_fallback_workspace_for_virtual_output(&mut self, virtual_output_id: VirtualOutputId, exclude_workspace: WorkspaceId) -> Option<WorkspaceId> {
-        // Strategy: find the first workspace that is not currently visible on any virtual output
+        // strategy: find the first workspace that is not currently visible on any virtual output
         for (workspace_id, _) in &self.workspaces {
             if *workspace_id == exclude_workspace {
                 continue; // Skip the workspace being claimed
             }
             
-            // Check if this workspace is currently visible on any virtual output
+            // check if this workspace is currently visible on any virtual output
             let is_visible = self.virtual_output_manager.all()
                 .any(|vout| vout.active_workspace() == Some(*workspace_id));
             
@@ -296,7 +296,7 @@ impl Shell {
             }
         }
         
-        // If all workspaces are visible, create a new one
+        // if all workspaces are visible, create a new one
         // Find next available workspace number
         let next_number = (1..=100)
             .find(|&n| !self.workspace_names.contains_key(&n.to_string()))

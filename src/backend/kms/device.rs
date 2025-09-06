@@ -502,7 +502,7 @@ fn create_output_for_conn(drm: &mut DrmDevice, conn: connector::Handle, display_
         },
     );
     
-    // Create the global to advertise this output to Wayland clients
+    // create the global to advertise this output to Wayland clients
     let _global = output.create_global::<crate::state::State>(display_handle);
     tracing::info!("Created wl_output global for {}", output.name());
     
@@ -534,7 +534,7 @@ fn populate_modes(
         refresh: refresh_rate as i32,
     };
 
-    // Add all available modes
+    // add all available modes
     let mut modes = Vec::new();
     for mode in conn_info.modes() {
         let refresh_rate = super::drm_helpers::calculate_refresh_rate(*mode);
@@ -546,7 +546,7 @@ fn populate_modes(
         output.add_mode(mode);
     }
     
-    // Remove any modes that no longer exist
+    // remove any modes that no longer exist
     for mode in output
         .modes()
         .into_iter()
@@ -556,7 +556,7 @@ fn populate_modes(
     }
     output.set_preferred(output_mode);
 
-    // Set initial configuration
+    // set initial configuration
     let scale = 1.0; // simplified - could have more complex scale calculation
     let transform = Transform::Normal; // simplified - could read panel orientation
     output.change_current_state(

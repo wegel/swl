@@ -35,7 +35,7 @@ impl FromGlesError for GlesError {
 impl FromGlesError for GlMultiError {
     fn from_gles_error(err: GlesError) -> Self {
         // convert GlesError to MultiError
-        // The Render variant expects the renderer error type
+        // the Render variant expects the renderer error type
         smithay::backend::renderer::multigpu::Error::Render(err)
     }
 }
@@ -173,7 +173,7 @@ impl<R: Renderer> RenderElement<R> for DamageElement {
     }
 }
 
-// DamageElement doesn't have underlying storage as it's draw-only
+// damage element doesn't have underlying storage as it's draw-only
 
 /// Simplified render element enum for basic compositor functionality
 /// This will grow as we add more features
@@ -349,5 +349,5 @@ where
     }
 }
 
-// Note: UnderlyingStorage trait implementation would be needed for advanced features
-// For now, basic rendering is sufficient
+// note: UnderlyingStorage trait implementation would be needed for advanced features
+// for now, basic rendering is sufficient

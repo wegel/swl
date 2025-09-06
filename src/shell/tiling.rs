@@ -6,7 +6,7 @@ use smithay::{
 };
 use tracing::debug;
 
-// Import border width from shell module
+// import border width from shell module
 use crate::shell::BORDER_WIDTH;
 use crate::utils::coordinates::VirtualOutputRelativeRect;
 
@@ -66,18 +66,18 @@ impl TilingLayout {
         let area_width = self.available_area.size().w;
         let area_height = self.available_area.size().h;
         
-        // Calculate space available for windows (excluding all borders)
+        // calculate space available for windows (excluding all borders)
         let (master_window_width, stack_window_width) = if n > self.n_master {
-            // We have 2 columns, so need 3 borders: left, middle, right
+            // we have 2 columns, so need 3 borders: left, middle, right
             let total_window_space = area_width - 3 * BORDER_WIDTH;
             
-            // Master gets its portion, rounded up (gets remainder pixel)
+            // master gets its portion, rounded up (gets remainder pixel)
             let master_w = ((total_window_space as f32 * self.master_factor).ceil() as i32).max(1);
             let stack_w = (total_window_space - master_w).max(1);
             
             (master_w, stack_w)
         } else {
-            // Single column, just 2 borders: left and right
+            // single column, just 2 borders: left and right
             let window_w = area_width - 2 * BORDER_WIDTH;
             (window_w, 0)
         };
@@ -85,14 +85,14 @@ impl TilingLayout {
         // tile master windows (left side)
         let master_count = n.min(self.n_master);
         
-        // Calculate vertical space for master windows
+        // calculate vertical space for master windows
         let total_height_space = area_height - (master_count + 1) as i32 * BORDER_WIDTH;
         
         for i in 0..master_count {
-            // Calculate window position
+            // calculate window position
             let x = area_x + BORDER_WIDTH;
             
-            // Calculate height for this window - first window gets remainder pixels
+            // calculate height for this window - first window gets remainder pixels
             let base_height = total_height_space / master_count as i32;
             let remainder = total_height_space % master_count as i32;
             let h = if i == 0 {
@@ -101,11 +101,11 @@ impl TilingLayout {
                 base_height
             };
             
-            // Calculate Y position
+            // calculate Y position
             let y = if i == 0 {
                 area_y + BORDER_WIDTH
             } else {
-                // Sum heights of previous windows plus borders
+                // sum heights of previous windows plus borders
                 let mut y_pos = area_y + BORDER_WIDTH;
                 for j in 0..i {
                     let prev_h = if j == 0 {
@@ -132,16 +132,16 @@ impl TilingLayout {
         if n > self.n_master {
             let stack_count = n - self.n_master;
             
-            // Calculate vertical space for stack windows
+            // calculate vertical space for stack windows
             let total_height_space = area_height - (stack_count + 1) as i32 * BORDER_WIDTH;
             
             for i in 0..stack_count {
                 let stack_i = i + self.n_master;
                 
-                // Stack X position: master windows + left border + master width + middle border
+                // stack X position: master windows + left border + master width + middle border
                 let x = area_x + BORDER_WIDTH + master_window_width + BORDER_WIDTH;
                 
-                // Calculate height for this window - first window gets remainder pixels
+                // calculate height for this window - first window gets remainder pixels
                 let base_height = total_height_space / stack_count as i32;
                 let remainder = total_height_space % stack_count as i32;
                 let h = if i == 0 {
@@ -150,11 +150,11 @@ impl TilingLayout {
                     base_height
                 };
                 
-                // Calculate Y position
+                // calculate Y position
                 let y = if i == 0 {
                     area_y + BORDER_WIDTH
                 } else {
-                    // Sum heights of previous windows plus borders
+                    // sum heights of previous windows plus borders
                     let mut y_pos = area_y + BORDER_WIDTH;
                     for j in 0..i {
                         let prev_h = if j == 0 {

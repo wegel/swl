@@ -134,7 +134,7 @@ pub enum SurfaceCommand {
 struct PostprocessState {
     texture: TextureRenderBuffer<GlesTexture>,
     damage_tracker: OutputDamageTracker,
-    // Phase 5d: Multi-buffer support for proper damage tracking
+    // multi-buffer support for proper damage tracking
     // TODO: Replace single texture with array of 2-3 textures
     // buffer_index: usize,
     // textures: Vec<TextureRenderBuffer<GlesTexture>>,
@@ -702,7 +702,7 @@ impl SurfaceThreadState {
         let min_min_refresh_interval = Duration::from_secs_f64(1.0 / 30.0); // 30Hz
         self.timings.set_min_refresh_interval(Some(min_min_refresh_interval));
         
-        // Phase 4h: Check VRR support on this output
+        // check VRR support on this output
         let vrr_support = compositor.with_compositor(|c| {
             c.vrr_supported(c.pending_connectors().into_iter().next().unwrap())
         }).ok();
@@ -754,10 +754,10 @@ impl SurfaceThreadState {
         self.target_node
     }
     
-    /// Phase 5a: Check if we can use direct rendering (bypass offscreen)
+    /// check if we can use direct rendering (bypass offscreen)
     fn can_use_direct_render(&self) -> bool {
-        // Phase 5a: Enable direct rendering when conditions are met
-        // Direct rendering is possible when:
+        // enable direct rendering when conditions are met
+        // direct rendering is possible when:
         // 1. No screen filters active (we don't have any yet)
         // 2. No output mirroring (we don't support mirroring yet)  
         // 3. No transform/scaling mismatch (not implemented)
@@ -768,26 +768,26 @@ impl SurfaceThreadState {
         true
     }
     
-    /// Phase 5c: Check if elements can use hardware planes
+    /// check if elements can use hardware planes
     // will be used in Phase 4i: Hardware Plane Optimization
     #[allow(dead_code)]
     fn assign_planes(&self, _elements: &[SwlElement<GlMultiRenderer>]) -> Vec<PlaneAssignment> {
-        // Phase 5c: Hardware plane support
+        // hardware plane support
         // TODO: Query available planes and assign elements to them
         // For now, everything goes to primary plane (rendered)
         vec![]
     }
     
-    /// Phase 5e: Check if we can do direct scanout (fullscreen bypass)
+    /// check if we can do direct scanout (fullscreen bypass)
     // will be used in Phase 4i: Hardware Plane Optimization
     #[allow(dead_code)]
     fn can_direct_scanout(&self, _elements: &[SwlElement<GlMultiRenderer>]) -> bool {
-        // Phase 5e: Direct scanout for fullscreen content
+        // direct scanout for fullscreen content
         // TODO: Check if single fullscreen element with compatible buffer
         false
     }
     
-    /// Phase 4h: Check and enable VRR if supported
+    /// check and enable VRR if supported
     // will be used for dynamic VRR updates
     #[allow(dead_code)]
     fn update_vrr(&mut self, enable: bool) {
@@ -1044,7 +1044,7 @@ impl SurfaceThreadState {
         }
         
         // check we have postprocess state (only if not using direct render)
-        // Phase 5a: Direct Rendering Path - decide between direct and offscreen rendering
+        // decide between direct and offscreen rendering
         let use_direct_render = self.can_use_direct_render();
         
         if !use_direct_render && self.postprocess.is_none() {
@@ -1052,7 +1052,7 @@ impl SurfaceThreadState {
             return Ok(());
         }
         
-        // Phase 4b: Collect render elements from the shell
+        // collect render elements from the shell
         // get appropriate renderer before borrowing shell
         let format = self.compositor.as_ref().unwrap().format();
         let render_node = self.render_node_for_output();
@@ -1088,7 +1088,7 @@ impl SurfaceThreadState {
         };
         
         // add cursor elements
-        // Phase 4f: Add cursor rendering - software cursor for now
+        // add cursor rendering - software cursor for now
         // TODO: Hardware cursor via DRM planes will be added later in this phase
         
         // get cursor info from shell (which is updated by input handler)
@@ -1153,7 +1153,7 @@ impl SurfaceThreadState {
         // mark element gathering done
         self.timings.elements_done(&self.clock);
         
-        // Phase 4h: Determine if VRR should be active
+        // determine if VRR should be active
         let has_fullscreen = {
             let shell = self.shell.read().unwrap();
             shell.get_fullscreen(&self.output).is_some()
@@ -1175,9 +1175,9 @@ impl SurfaceThreadState {
         // update timings for VRR
         self.timings.set_vrr(vrr);
         
-        // Phase 5a: Choose between direct and offscreen rendering
+        // choose between direct and offscreen rendering
         if use_direct_render {
-            // Phase 5a: Direct rendering path - render directly to DRM framebuffer
+            // direct rendering path - render directly to DRM framebuffer
             // debug!("[DIRECT] Starting render for {} (VRR={})", self.output.name(), vrr);
             
             // render directly to the DRM compositor's framebuffer
@@ -1222,7 +1222,7 @@ impl SurfaceThreadState {
                     };
                     
                     // for direct rendering, we don't have damage tracking yet
-                    // Phase 5b will add proper damage tracking with swapchain
+                    // TODO: add proper damage tracking with swapchain
                     self.last_frame_damage = None;
                     
                     // send frame callbacks now since we queued a frame
@@ -1260,7 +1260,7 @@ impl SurfaceThreadState {
         // offscreen rendering path - render to texture first for post-processing
         // debug!("[OFFSCREEN] Starting render for {}", self.output.name());
         
-        // Phase 2jb: Render to offscreen texture using PostprocessState
+        // render to offscreen texture using PostprocessState
         // Use the already obtained renderer for texture operations  
         let postprocess = self.postprocess.as_mut().unwrap();
         let transform = self.output.current_transform();
@@ -1273,7 +1273,7 @@ impl SurfaceThreadState {
                 
                 // buffer age tells us how many frames ago this buffer was last used
                 // for offscreen textures, we use age 1 (always redraw everything for now)
-                let age = 1; // Phase 2je will track this properly
+                let age = 1; // TODO: track this properly
                 
                 // use OutputDamageTracker to render with damage tracking
                 let res = match postprocess.damage_tracker.render_output(
@@ -1298,7 +1298,7 @@ impl SurfaceThreadState {
                 // mark drawing done
                 self.timings.draw_done(&self.clock);
                 
-                // Phase 2je: Return and accumulate damage regions
+                // return and accumulate damage regions
                 let area = texture.size().to_logical(1, transform);
                 
                 let damage = res.damage
@@ -1322,7 +1322,7 @@ impl SurfaceThreadState {
             // which forces full redraw. This will be fixed when we implement
             // proper buffer age tracking in Phase 2je
             
-        // Phase 2jc: Composite the offscreen texture to the display
+        // composite the offscreen texture to the display
         // Create a texture element from our offscreen buffer
         // This is a simplified version of postprocess_elements()
         let texture_element = TextureRenderElement::from_texture_render_buffer(

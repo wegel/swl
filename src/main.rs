@@ -142,7 +142,7 @@ fn init_wayland_display(
             calloop::generic::Generic::new(display, Interest::READ, Mode::Level),
             move |_, display, state: &mut State| {
                 // dispatch pending messages from clients
-                // SAFETY: We don't drop the display
+                // SAFETY: we don't drop the display
                 match unsafe { display.get_mut().dispatch_clients(state) } {
                     Ok(_) => Ok(PostAction::Continue),
                     Err(e) => {

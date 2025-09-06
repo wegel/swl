@@ -17,7 +17,7 @@ impl Shell {
     pub fn unconstrain_popup(&self, surface: &PopupSurface) {
         tracing::debug!("Shell::unconstrain_popup called");
         
-        // Get the toplevel parent surface
+        // get the toplevel parent surface
         let parent = surface.get_parent_surface();
         if parent.is_none() {
             tracing::warn!("Popup has no parent surface");
@@ -26,21 +26,21 @@ impl Shell {
         let parent = parent.unwrap();
         tracing::debug!("Popup parent surface found");
         
-        // Find the window that contains this parent surface
+        // find the window that contains this parent surface
         let window = self.space.elements().find(|w| {
             w.wl_surface().as_ref().map(|s| s.as_ref()) == Some(&parent)
         });
         
         if let Some(window) = window {
-            // Get window location in the space
+            // get window location in the space
             let window_loc = GlobalPoint(self.space.element_location(window)
                 .unwrap_or_else(|| Point::from((0, 0))));
             let window_geo = window.geometry();
             
-            // Get the output containing the window
+            // get the output containing the window
             let output = self.visible_output_for_surface(&parent);
             if let Some(output) = output {
-                // Get output geometry from the space
+                // get output geometry from the space
                 let output_rect = self.space.output_geometry(output)
                     .map(GlobalRect)
                     .unwrap_or_else(|| GlobalRect::new(GlobalPoint::new(0, 0), Size::from((1920, 1080))));

@@ -85,7 +85,7 @@ impl State {
                         time,
                         |state, modifiers, keysym| {
                             // check if this is a keybinding
-                            // Use raw_latin_sym_or_raw_current_sym() to get the unshifted key for bindings
+                            // use raw_latin_sym_or_raw_current_sym() to get the unshifted key for bindings
                             let key = keysym.raw_latin_sym_or_raw_current_sym().unwrap_or(keysym.modified_sym());
                             if let Some(action) = state.keybindings.check(modifiers, key, event.state()) {
                                 trace!("Key intercepted for action: {:?}", action);
@@ -133,7 +133,7 @@ impl State {
                         },
                     );
                     
-                    // Send frame event after motion
+                    // send frame event after motion
                     pointer.frame(self);
                     
                     // update cursor position in shell (for rendering)
@@ -159,11 +159,11 @@ impl State {
                             let scale = output.current_scale().fractional_scale();
                             let transform = output.current_transform();
                             
-                            // Calculate logical size accounting for scale
+                            // calculate logical size accounting for scale
                             let mut width = mode.size.w as f64 / scale;
                             let mut height = mode.size.h as f64 / scale;
                             
-                            // Account for rotation - swap dimensions if rotated 90 or 270 degrees
+                            // account for rotation - swap dimensions if rotated 90 or 270 degrees
                             use smithay::utils::Transform;
                             match transform {
                                 Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => {
@@ -207,7 +207,7 @@ impl State {
                         },
                     );
                     
-                    // Send frame event after motion
+                    // send frame event after motion
                     pointer.frame(self);
                     
                     // update cursor position in shell (for rendering)
@@ -230,14 +230,14 @@ impl State {
                     let pointer_loc = self.seat.get_pointer().unwrap().current_location();
                     trace!("Button pressed at location: {:?}", pointer_loc);
                     
-                    // First check if this is a tab click
+                    // first check if this is a tab click
                     let mut tab_clicked = false;
                     let mut tab_surface = None;
                     if let Some(output) = self.outputs.first() {
                         let mut shell = self.shell.write().unwrap();
                         if shell.handle_tab_click(output, pointer_loc) {
                             tab_clicked = true;
-                            // Update keyboard focus to the active tab
+                            // update keyboard focus to the active tab
                             if let Some(virtual_output_id) = shell.virtual_output_at_position(output, pointer_loc) {
                                 if let Some(virtual_output) = shell.virtual_output_manager.get(virtual_output_id) {
                                     if let Some(workspace_name) = &virtual_output.active_workspace {
@@ -252,14 +252,14 @@ impl State {
                         }
                     }
                     
-                    // Set keyboard focus if tab was clicked
+                    // set keyboard focus if tab was clicked
                     if let Some(surface) = tab_surface {
                         let keyboard = self.seat.get_keyboard().unwrap();
                         let serial = SERIAL_COUNTER.next_serial();
                         keyboard.set_focus(self, Some(surface), serial);
                     }
                     
-                    // If not a tab click, handle normal window focus
+                    // if not a tab click, handle normal window focus
                     if !tab_clicked {
                         // find window under cursor and focus it
                         let window_to_focus = {
@@ -285,7 +285,7 @@ impl State {
                         }
                     }
                     
-                    // Schedule render after any tab or focus changes
+                    // schedule render after any tab or focus changes
                     if let Some(output) = self.outputs.first() {
                         self.backend.schedule_render(output);
                     }

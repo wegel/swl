@@ -51,7 +51,7 @@ pub fn update_dbus_environment(socket_name: &str) {
 
 /// Update both systemd and D-Bus environments
 pub fn update_environment(socket_name: &str) {
-    // Set WAYLAND_DISPLAY in the current process environment
+    // set WAYLAND_DISPLAY in the current process environment
     // SAFETY: We're the only thread modifying environment variables at this point
     unsafe {
         std::env::set_var("WAYLAND_DISPLAY", socket_name);

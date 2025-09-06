@@ -180,7 +180,7 @@ impl Keybindings {
             Action::Quit,
         ));
         
-        // Workspace switching - Super+1-9 and Super+0 for workspace 10
+        // workspace switching - Super+1-9 and Super+0 for workspace 10
         for i in 1..=9 {
             bindings.push(Keybinding::new(
                 modkey,
@@ -188,14 +188,14 @@ impl Keybindings {
                 Action::SwitchToWorkspace(i.to_string()),
             ));
         }
-        // Super+0 for workspace 10
+        // super+0 for workspace 10
         bindings.push(Keybinding::new(
             modkey,
             xkb::KEY_0,
             Action::SwitchToWorkspace("10".to_string()),
         ));
         
-        // Move window to workspace - Super+Shift+1-9 and Super+Shift+0 for workspace 10
+        // move window to workspace - Super+Shift+1-9 and Super+Shift+0 for workspace 10
         for i in 1..=9 {
             bindings.push(Keybinding::new(
                 ModifiersState {
@@ -206,7 +206,7 @@ impl Keybindings {
                 Action::MoveToWorkspace(i.to_string()),
             ));
         }
-        // Super+Shift+0 for workspace 10
+        // super+Shift+0 for workspace 10
         bindings.push(Keybinding::new(
             ModifiersState {
                 shift: true,

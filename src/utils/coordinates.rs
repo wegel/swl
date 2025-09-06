@@ -224,7 +224,7 @@ impl VirtualOutputRelativeRect {
     }
 }
 
-// Arithmetic operations
+// arithmetic operations
 impl Add<Point<i32, Logical>> for VirtualOutputRelativePoint {
     type Output = Self;
     
@@ -249,7 +249,7 @@ impl Add<GlobalPoint> for Point<i32, Logical> {
     }
 }
 
-// Helper trait for easy conversion from smithay Output methods
+// helper trait for easy conversion from smithay Output methods
 pub trait OutputExt {
     fn current_location_typed(&self) -> GlobalPoint;
 }
@@ -260,7 +260,7 @@ impl OutputExt for smithay::output::Output {
     }
 }
 
-// Helper trait for easy conversion from smithay Space methods  
+// helper trait for easy conversion from smithay Space methods  
 pub trait SpaceExt<W> {
     fn element_location_typed(&self, element: &W) -> Option<GlobalPoint>;
 }
@@ -274,7 +274,7 @@ where
     }
 }
 
-// Conversions from smithay types
+// conversions from smithay types
 impl From<Point<i32, Logical>> for GlobalPoint {
     fn from(point: Point<i32, Logical>) -> Self {
         Self(point)
@@ -319,7 +319,7 @@ impl From<GlobalRect> for VirtualOutputRelativeRect {
     }
 }
 
-// Conversions back to smithay types
+// conversions back to smithay types
 impl From<GlobalRect> for Rectangle<i32, Logical> {
     fn from(rect: GlobalRect) -> Self {
         rect.0

@@ -15,14 +15,14 @@ use tracing::{info, warn, error};
 /// 2. $XDG_CONFIG_HOME/swl/run
 /// 3. $HOME/.config/swl/run
 pub fn run_startup_program() {
-    // First check SWL_RUN environment variable
+    // first check SWL_RUN environment variable
     if let Ok(program) = env::var("SWL_RUN") {
         info!("Running startup program from SWL_RUN: {}", program);
         execute_program(&program);
         return;
     }
     
-    // Then check config directories
+    // then check config directories
     let config_path = find_config_program();
     if let Some(path) = config_path {
         info!("Running startup program from: {}", path.display());
@@ -33,7 +33,7 @@ pub fn run_startup_program() {
 }
 
 fn find_config_program() -> Option<PathBuf> {
-    // Try XDG_CONFIG_HOME first
+    // try XDG_CONFIG_HOME first
     if let Ok(xdg_config) = env::var("XDG_CONFIG_HOME") {
         let path = PathBuf::from(xdg_config).join("swl/run");
         if path.exists() {
@@ -41,7 +41,7 @@ fn find_config_program() -> Option<PathBuf> {
         }
     }
     
-    // Fall back to $HOME/.config/swl/run
+    // fall back to $HOME/.config/swl/run
     if let Ok(home) = env::var("HOME") {
         let path = PathBuf::from(home).join(".config/swl/run");
         if path.exists() {
@@ -53,15 +53,15 @@ fn find_config_program() -> Option<PathBuf> {
 }
 
 fn execute_program(program_path: &str) {
-    // Check if the program is executable
+    // check if the program is executable
     let path = PathBuf::from(program_path);
     if path.exists() && !is_executable(&path) {
         warn!("Startup program {} exists but is not executable", program_path);
         return;
     }
     
-    // Fork and execute the program in a thread that will wait for it
-    // The program will inherit all environment variables including WAYLAND_DISPLAY
+    // fork and execute the program in a thread that will wait for it
+    // the program will inherit all environment variables including WAYLAND_DISPLAY
     let program_path = program_path.to_string();
     std::thread::spawn(move || {
         match Command::new(&program_path)
@@ -97,7 +97,7 @@ fn is_executable(path: &PathBuf) -> bool {
     match fs::metadata(path) {
         Ok(metadata) => {
             let permissions = metadata.permissions();
-            // Check if any execute bit is set (user, group, or other)
+            // check if any execute bit is set (user, group, or other)
             permissions.mode() & 0o111 != 0
         }
         Err(_) => false,
@@ -106,6 +106,6 @@ fn is_executable(path: &PathBuf) -> bool {
 
 #[cfg(not(unix))]
 fn is_executable(_path: &PathBuf) -> bool {
-    // On non-Unix systems, assume scripts are executable
+    // on non-Unix systems, assume scripts are executable
     true
 }
