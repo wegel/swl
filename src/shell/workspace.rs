@@ -177,6 +177,17 @@ impl Workspace {
         was_present
     }
 
+    /// Check if this workspace has a fullscreen window
+    pub fn has_fullscreen(&self) -> bool {
+        self.fullscreen.is_some()
+    }
+
+    /// Get the fullscreen window if any
+    #[allow(dead_code)] // might be used in future phases
+    pub fn get_fullscreen(&self) -> Option<&Window> {
+        self.fullscreen.as_ref()
+    }
+
     /// Get tiled windows (non-floating, non-fullscreen)
     pub fn tiled_windows(&self) -> impl Iterator<Item = &Window> {
         self.windows

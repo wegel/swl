@@ -553,6 +553,14 @@ impl Shell {
     pub fn window_under(&self, point: Point<f64, Logical>) -> Option<Window> {
         use tracing::debug;
 
+        // first check if we have a fullscreen window on the output containing this point
+        if let Some(output) = self.output_at(point) {
+            if let Some(fullscreen_window) = self.get_fullscreen(&output) {
+                // when there's a fullscreen window, only that window can be "under" the cursor
+                return Some(fullscreen_window.clone());
+            }
+        }
+
         for window in self.space.elements() {
             // get the window's position in space
             let location = self
@@ -800,28 +808,26 @@ impl Shell {
 
     /// Toggle fullscreen for the focused window
     pub fn toggle_fullscreen(&mut self, output: &Output) {
-        if let Some(focused_window) = self.focused_window.clone() {
-            // find virtual output containing the focused window
-            let vout_id = self
-                .workspaces
-                .values()
-                .find(|ws| ws.windows.contains(&focused_window))
-                .and_then(|ws| ws.virtual_output_id);
+        // first find the virtual output for this physical output
+        let vout = self
+            .virtual_output_manager
+            .virtual_outputs_for_physical(output)
+            .first()
+            .map(|v| v.id);
 
-            if let Some(vout_id) = vout_id {
-                if let Some(vout) = self.virtual_output_manager.get(vout_id) {
-                    // find the workspace that contains the focused window
-                    if let Some(workspace_name) = &vout.active_workspace {
-                        if let Some(workspace) = self.workspaces.get_mut(workspace_name) {
-                            // check if the focused window is already fullscreen
-                            let is_fullscreen =
-                                workspace.fullscreen.as_ref() == Some(&focused_window);
-
-                            if is_fullscreen {
-                                // unfullscreen the window
-                                workspace.fullscreen = None;
-                                // don't clear the cached offset yet - we'll use it during arrangement
-                            } else {
+        if let Some(vout_id) = vout {
+            if let Some(vout) = self.virtual_output_manager.get(vout_id) {
+                if let Some(workspace_id) = vout.active_workspace() {
+                    if let Some(workspace) = self.workspaces.get_mut(&workspace_id) {
+                        // check if workspace already has a fullscreen window
+                        if let Some(_fullscreen_window) = workspace.fullscreen.clone() {
+                            // exit fullscreen for the existing fullscreen window
+                            workspace.fullscreen = None;
+                            workspace.needs_arrange = true;
+                            tracing::debug!("Exiting fullscreen mode");
+                        } else if let Some(focused_window) = self.focused_window.clone() {
+                            // only fullscreen the focused window if it's in this workspace
+                            if workspace.windows.contains(&focused_window) {
                                 // cache the current geometry offset before going fullscreen
                                 let geom = focused_window.geometry();
                                 if geom.loc.x != 0 || geom.loc.y != 0 {
@@ -835,17 +841,17 @@ impl Shell {
                                 }
                                 // fullscreen the focused window
                                 workspace.fullscreen = Some(focused_window);
+                                workspace.needs_arrange = true;
+                                tracing::debug!("Entering fullscreen mode");
                             }
-
-                            workspace.needs_arrange = true;
                         }
                     }
                 }
             }
-
-            // arrange windows after fullscreen change
-            self.arrange_windows_on_output(output);
         }
+
+        // arrange windows after fullscreen change
+        self.arrange_windows_on_output(output);
     }
 
     /// Refresh the space (needed for damage tracking)
@@ -1523,28 +1529,36 @@ impl Shell {
         tracing::debug!("focus_next called");
 
         // Find workspace containing the currently focused window
-        let workspace_name = self.focused_window.as_ref().and_then(|focused_window| {
+        let workspace_id = self.focused_window.as_ref().and_then(|focused_window| {
             // Find which workspace contains this window
-            for (name, workspace) in &self.workspaces {
+            for (id, workspace) in &self.workspaces {
                 if workspace.windows.contains(focused_window) {
-                    tracing::debug!("Found focused window in workspace: {}", name);
-                    return Some(name.clone());
+                    tracing::debug!("Found focused window in workspace: {:?}", id);
+                    return Some(*id);
                 }
             }
             None
         });
 
-        let workspace_name = match workspace_name {
-            Some(name) => name,
+        let workspace_id = match workspace_id {
+            Some(id) => id,
             None => {
                 tracing::debug!("No focused window or workspace found, returning");
                 return;
             }
         };
 
+        // check if this workspace has a fullscreen window
+        if let Some(workspace) = self.workspaces.get(&workspace_id) {
+            if workspace.has_fullscreen() {
+                tracing::debug!("Workspace has fullscreen window, focus_next disabled");
+                return;
+            }
+        }
+
         // Get next window in visual order
         let next_window = {
-            let workspace = match self.workspaces.get_mut(&workspace_name) {
+            let workspace = match self.workspaces.get_mut(&workspace_id) {
                 Some(ws) => ws,
                 None => return,
             };
@@ -1605,28 +1619,36 @@ impl Shell {
         tracing::debug!("focus_prev called");
 
         // Find workspace containing the currently focused window
-        let workspace_name = self.focused_window.as_ref().and_then(|focused_window| {
+        let workspace_id = self.focused_window.as_ref().and_then(|focused_window| {
             // Find which workspace contains this window
-            for (name, workspace) in &self.workspaces {
+            for (id, workspace) in &self.workspaces {
                 if workspace.windows.contains(focused_window) {
-                    tracing::debug!("Found focused window in workspace: {}", name);
-                    return Some(name.clone());
+                    tracing::debug!("Found focused window in workspace: {:?}", id);
+                    return Some(*id);
                 }
             }
             None
         });
 
-        let workspace_name = match workspace_name {
-            Some(name) => name,
+        let workspace_id = match workspace_id {
+            Some(id) => id,
             None => {
                 tracing::debug!("No focused window or workspace found, returning");
                 return;
             }
         };
 
+        // check if this workspace has a fullscreen window
+        if let Some(workspace) = self.workspaces.get(&workspace_id) {
+            if workspace.has_fullscreen() {
+                tracing::debug!("Workspace has fullscreen window, focus_prev disabled");
+                return;
+            }
+        }
+
         // Get previous window in visual order
         let prev_window = {
-            let workspace = match self.workspaces.get_mut(&workspace_name) {
+            let workspace = match self.workspaces.get_mut(&workspace_id) {
                 Some(ws) => ws,
                 None => return,
             };
