@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# run all pre-commit checks
+for check in .githooks/checks/*-check.sh; do
+    if [ -f "$check" ] && [ -x "$check" ]; then
+        if ! "$check" pre-commit; then
+            exit 1
+        fi
+    fi
+done
+
+exit 0

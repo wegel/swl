@@ -1,0 +1,8 @@
+#!/bin/sh
+
+# run commit message check
+if ! .githooks/checks/commit-message-check.sh "$1"; then
+    exit 1
+fi
+
+exit 0
