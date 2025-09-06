@@ -211,6 +211,11 @@ impl TilingLayout {
         self.available_area = area.into();
         debug!("Available area updated to {:?}", self.available_area);
     }
+    
+    /// Get current available area
+    pub fn available_area(&self) -> VirtualOutputRelativeRect {
+        self.available_area
+    }
 
     /// Get current master factor
     #[allow(dead_code)] // will be used for status display

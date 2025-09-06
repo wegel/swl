@@ -86,7 +86,7 @@ pub struct State {
     pub shell: Arc<RwLock<Shell>>,
     pub outputs: Vec<Output>,
     pub cursor_bounds: Option<smithay::utils::Rectangle<f64, smithay::utils::Logical>>,
-    pub pending_windows: Vec<(ToplevelSurface, Window)>,
+    pub pending_windows: Vec<(ToplevelSurface, Window, Option<crate::shell::virtual_output::VirtualOutputId>)>,
     pub popups: PopupManager,
     #[allow(dead_code)] // will be used for server-side cursor rendering
     pub cursor_state: CursorState,

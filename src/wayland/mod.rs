@@ -144,13 +144,13 @@ impl CompositorHandler for State {
         if let Some(index) = self
             .pending_windows
             .iter()
-            .position(|(toplevel, _)| toplevel.wl_surface() == surface)
+            .position(|(toplevel, _, _)| toplevel.wl_surface() == surface)
         {
             // check if surface now has a buffer
             if with_renderer_surface_state(surface, |state| state.buffer().is_some())
                 .unwrap_or(false)
             {
-                let (toplevel, window) = self.pending_windows.remove(index);
+                let (toplevel, window, target_vout) = self.pending_windows.remove(index);
 
                 // the window is ready to be mapped - call on_commit to update geometry
                 window.on_commit();
@@ -181,24 +181,19 @@ impl CompositorHandler for State {
                         state.states.contains(xdg_toplevel::State::Fullscreen)
                     });
 
-                    // Get cursor position to determine correct virtual output
-                    let cursor_pos = self.seat.get_pointer().unwrap().current_location();
-
                     let mut shell = self.shell.write().unwrap();
 
-                    // Find virtual output containing cursor position
-                    if let Some(virtual_output_id) = shell.virtual_output_at_point(cursor_pos) {
-                        tracing::debug!(
-                            "Adding window to virtual output {:?} at cursor position {:?}",
-                            virtual_output_id,
-                            cursor_pos
-                        );
-                        shell.add_window_to_virtual_output(window.clone(), virtual_output_id);
-                    } else {
-                        // Fallback to legacy method if cursor not over any virtual output
-                        tracing::debug!("Cursor not over any virtual output, using fallback");
-                        shell.add_window(window.clone(), &output);
-                    }
+                    // Always use the pre-determined virtual output
+                    // This was calculated during initial_configure_request based on cursor position
+                    let virtual_output_id = target_vout.expect(
+                        "Virtual output must be determined during initial_configure_request"
+                    );
+                    
+                    tracing::debug!(
+                        "Adding window to virtual output {:?}",
+                        virtual_output_id
+                    );
+                    shell.add_window_to_virtual_output(window.clone(), virtual_output_id);
 
                     if is_fullscreen {
                         tracing::debug!("Window is fullscreen, updating shell state");
@@ -220,7 +215,7 @@ impl CompositorHandler for State {
                 } else {
                     tracing::warn!("No outputs available for window mapping");
                     // put it back in pending
-                    self.pending_windows.push((toplevel, window));
+                    self.pending_windows.push((toplevel, window, target_vout));
                 }
             } else {
                 tracing::debug!("Pending window surface committed but no buffer yet");
@@ -353,7 +348,22 @@ impl XdgShellHandler for State {
             title
         );
 
-        if is_fullscreen {
+        // determine target virtual output based on cursor position
+        // cursor must always be over a virtual output since virtual outputs cover all physical outputs
+        let cursor_pos = self.seat.get_pointer().unwrap().current_location();
+        let shell = self.shell.read().unwrap();
+        
+        let virtual_output_id = shell.virtual_output_at_point(cursor_pos)
+            .expect("Cursor must always be over a virtual output");
+        
+        tracing::debug!(
+            "Window will be placed on virtual output {:?} at cursor position {:?}",
+            virtual_output_id,
+            cursor_pos
+        );
+
+        // determine initial size based on window type
+        let target_vout = if is_fullscreen {
             tracing::debug!("Window requested fullscreen before mapping");
             // fullscreen state already set by fullscreen_request
             // just need to set activated
@@ -361,38 +371,84 @@ impl XdgShellHandler for State {
                 state.states.set(xdg_toplevel::State::Activated);
                 // size should already be set by fullscreen_request
             });
+            Some(virtual_output_id)
         } else {
-            // normal window - send initial configure with size and activated state
-            // Use scale-aware initial size based on the first output
-            let initial_size = if let Some(output) = self.outputs.first() {
-                let scale = output.current_scale().fractional_scale();
-                // Use a reasonable default that accounts for scale
-                // This ensures the window fits on high-DPI displays
-                let base_size = Size::from((800, 600));
-                // For high DPI, we might want smaller logical sizes
-                if scale > 1.5 {
-                    Size::from((640, 480))
-                } else {
-                    base_size
-                }
+            // normal window - calculate size for this specific workspace
+            // check if window will be floating
+            let will_float = surface.parent().is_some();
+            
+            let initial_size = if will_float {
+                // floating window (dialog) - use 60% of the virtual output size
+                let vout = shell.virtual_output_manager.get(virtual_output_id)
+                    .expect("Virtual output must exist - we just got it from virtual_output_at_point");
+                let vout_size = vout.logical_geometry.size();
+                Size::from((
+                    (vout_size.w * 3 / 5).max(400),
+                    (vout_size.h * 3 / 5).max(300)
+                ))
             } else {
-                Size::from((800, 600))
+                // tiled window - calculate based on workspace
+                let vout = shell.virtual_output_manager.get(virtual_output_id)
+                    .expect("Virtual output must exist - we just got it from virtual_output_at_point");
+                    
+                let workspace_id = vout.active_workspace()
+                    .expect("Virtual output must have an active workspace - set during add_output");
+                    
+                let workspace = shell.workspaces.get(&workspace_id)
+                    .expect("Workspace must exist if it's active on a virtual output");
+                    
+                // count existing tiled windows
+                let tiled_count = workspace.windows.iter()
+                    .filter(|w| !workspace.floating_windows.contains(w))
+                    .count();
+                
+                // for first window, use full available area
+                // The window will handle tiling states and remove decorations accordingly
+                if tiled_count == 0 {
+                    let available = workspace.tiling.available_area();
+                    Size::from((
+                        available.size().w.max(100),
+                        available.size().h.max(100)
+                    ))
+                } else {
+                    // for subsequent windows, assume half width (master/stack)
+                    let available = workspace.tiling.available_area();
+                    Size::from((
+                        (available.size().w / 2).max(100),
+                        available.size().h.max(100)
+                    ))
+                }
             };
 
             surface.with_pending_state(|state| {
                 state.states.set(xdg_toplevel::State::Activated);
                 state.size = Some(initial_size);
+                
+                // Set tiled states to inform the window it should disable CSD
+                // This must be done in the initial configure to prevent the window
+                // from creating decorations in the first place
+                if !will_float {
+                    state.states.set(xdg_toplevel::State::TiledLeft);
+                    state.states.set(xdg_toplevel::State::TiledRight);
+                    state.states.set(xdg_toplevel::State::TiledTop);
+                    state.states.set(xdg_toplevel::State::TiledBottom);
+                }
             });
-        }
+            
+            Some(virtual_output_id)
+        };
+        
+        drop(shell);
 
         surface.send_configure();
         tracing::debug!(
-            "Sent initial configure to toplevel (fullscreen: {})",
-            is_fullscreen
+            "Sent initial configure to toplevel (fullscreen: {}, size: {:?})",
+            is_fullscreen,
+            surface.with_pending_state(|state| state.size)
         );
 
-        // store as pending window - will be mapped after first commit with buffer
-        self.pending_windows.push((surface, window));
+        // store as pending window with target virtual output
+        self.pending_windows.push((surface, window, target_vout));
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
@@ -574,13 +630,11 @@ impl XdgShellHandler for State {
 
         if let Some(window) = window {
             // use scale-aware restore size
-            let restore_size = if let Some(output) = self.outputs.first() {
-                let scale = output.current_scale().fractional_scale();
-                if scale > 1.5 {
-                    Size::from((640, 480))
-                } else {
-                    Size::from((800, 600))
-                }
+            let output = self.outputs.first()
+                .expect("Cannot have windows without outputs");
+            let scale = output.current_scale().fractional_scale();
+            let restore_size = if scale > 1.5 {
+                Size::from((640, 480))
             } else {
                 Size::from((800, 600))
             };
